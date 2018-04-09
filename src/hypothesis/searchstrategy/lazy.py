@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -17,18 +17,10 @@
 
 from __future__ import division, print_function, absolute_import
 
-from hypothesis.internal.compat import hrange, getfullargspec
+from hypothesis.internal.compat import getfullargspec
 from hypothesis.internal.reflection import arg_string, \
     convert_keyword_arguments, convert_positional_arguments
 from hypothesis.searchstrategy.strategies import SearchStrategy
-
-
-def tupleize(x):
-    if isinstance(x, (tuple, list)):
-        return tuple(x)
-    else:
-        return x
-
 
 unwrap_cache = {}
 unwrap_depth = 0
@@ -72,12 +64,10 @@ def unwrap_strategies(s):
 
 
 class LazyStrategy(SearchStrategy):
-
     """A strategy which is defined purely by conversion to and from another
     strategy.
 
     Its parameter and distribution come from that other strategy.
-
     """
 
     def __init__(self, function, args, kwargs):
@@ -85,10 +75,8 @@ class LazyStrategy(SearchStrategy):
         self.__wrapped_strategy = None
         self.__representation = None
         self.__function = function
-        self.__args = tuple(map(tupleize, args))
-        self.__kwargs = dict(
-            (k, tupleize(v)) for k, v in kwargs.items()
-        )
+        self.__args = args
+        self.__kwargs = kwargs
 
     @property
     def supports_find(self):
@@ -144,8 +132,9 @@ class LazyStrategy(SearchStrategy):
             argspec = getfullargspec(self.__function)
             defaults = dict(argspec.kwonlydefaults or {})
             if argspec.defaults is not None:
-                for k in hrange(1, len(argspec.defaults) + 1):
-                    defaults[argspec.args[-k]] = argspec.defaults[-k]
+                for name, value in zip(reversed(argspec.args),
+                                       reversed(argspec.defaults)):
+                    defaults[name] = value
             if len(argspec.args) > 1 or argspec.defaults:
                 _args, _kwargs = convert_positional_arguments(
                     self.__function, _args, _kwargs)
@@ -165,3 +154,7 @@ class LazyStrategy(SearchStrategy):
 
     def do_draw(self, data):
         return data.draw(self.wrapped_strategy)
+
+    @property
+    def label(self):
+        return self.wrapped_strategy.label

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -21,6 +21,7 @@ from array import array
 
 from hypothesis.internal.compat import hbytes, hrange, int_to_bytes
 from hypothesis.internal.floats import float_to_int, int_to_float
+from hypothesis.internal.conjecture.utils import calc_label_from_name
 
 """
 This module implements support for arbitrary floating point numbers in
@@ -90,6 +91,8 @@ SPECIAL_EXPONENTS = (0, MAX_EXPONENT)
 BIAS = 1023
 MAX_POSITIVE_EXPONENT = (MAX_EXPONENT - 1 - BIAS)
 
+DRAW_FLOAT_LABEL = calc_label_from_name('drawing a float')
+
 
 def exponent_key(e):
     if e == MAX_EXPONENT:
@@ -150,7 +153,6 @@ def reverse64(v):
 
     In this case concatenating consists of shifting them into the right
     position for the word and then oring the bits together.
-
     """
     assert v.bit_length() <= 64
     return (
@@ -231,7 +233,7 @@ def is_simple(f):
 
 def draw_float(data):
     try:
-        data.start_example()
+        data.start_example(DRAW_FLOAT_LABEL)
         f = lex_to_float(data.draw_bits(64))
         if data.draw_bits(1):
             f = -f

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -16,6 +16,8 @@
 # END HEADER
 
 from __future__ import division, print_function, absolute_import
+
+import sys
 
 import numpy as np
 import pytest
@@ -129,6 +131,7 @@ def test_can_generate_array_shapes(shape):
     assert all(isinstance(i, int) for i in shape)
 
 
+@settings(deadline=None)
 @given(st.integers(1, 10), st.integers(0, 9), st.integers(1), st.integers(0))
 def test_minimise_array_shapes(min_dims, dim_range, min_side, side_range):
     smallest = minimal(nps.array_shapes(min_dims, min_dims + dim_range,
@@ -184,12 +187,14 @@ def test_can_turn_off_subarrays(dt):
         assert field.shape == ()
 
 
-@given(nps.integer_dtypes(endianness='>'))
-def test_can_restrict_endianness(dt):
-    if dt.itemsize == 1:
-        assert dt.byteorder == '|'
+@pytest.mark.parametrize('byteorder', ['<', '>'])
+@given(data=st.data())
+def test_can_restrict_endianness(data, byteorder):
+    dtype = data.draw(nps.integer_dtypes(byteorder, sizes=(16, 32, 64)))
+    if byteorder == ('<' if sys.byteorder == 'little' else '>'):
+        assert dtype.byteorder == '='
     else:
-        assert dt.byteorder == '>'
+        assert dtype.byteorder == byteorder
 
 
 @given(nps.integer_dtypes(sizes=8))

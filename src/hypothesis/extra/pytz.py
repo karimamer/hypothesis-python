@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -20,7 +20,6 @@
 You can use this strategy to make
 :py:func:`hypothesis.strategies.datetimes` and
 :py:func:`hypothesis.strategies.times` produce timezone-aware values.
-
 """
 
 from __future__ import division, print_function, absolute_import
@@ -42,7 +41,6 @@ def timezones():
     This strategy minimises to UTC, or the smallest possible fixed
     offset, and is designed for use with
     :py:func:`hypothesis.strategies.datetimes`.
-
     """
     all_timezones = [pytz.timezone(tz) for tz in pytz.all_timezones]
     # Some timezones have always had a constant offset from UTC.  This makes

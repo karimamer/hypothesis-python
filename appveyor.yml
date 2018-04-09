@@ -10,17 +10,26 @@ environment:
       secure: TpmpMHwgS4xxcbbzROle2xyb3i+VPP8cT5ZL4dF/UrA=
 
   matrix:
+    - PYTHON: "C:\\Python27"
+      PYTHON_VERSION: "2.7.14"
+      PYTHON_ARCH: "32"
+
     - PYTHON: "C:\\Python27-x64"
-      PYTHON_VERSION: "2.7.13"
+      PYTHON_VERSION: "2.7.14"
       PYTHON_ARCH: "64"
 
-    - PYTHON: "C:\\Python35-x64"
-      PYTHON_VERSION: "3.5.3"
-      PYTHON_ARCH: "64"
+    - PYTHON: "C:\\Python36"
+      PYTHON_VERSION: "3.6.5"
+      PYTHON_ARCH: "32"
 
     - PYTHON: "C:\\Python36-x64"
-      PYTHON_VERSION: "3.6.1"
+      PYTHON_VERSION: "3.6.5"
       PYTHON_ARCH: "64"
+
+# Appveyor "helpfully" ignores skip directives in the commit message body
+# https://www.appveyor.com/docs/how-to/filtering-commits/#commit-message
+skip_commits:
+  message: /^Bump version to \d+\.\d+\.\d+ and update changelog/
 
 # This matches both branches and tags (no, I don't know why either).
 # We need a match both for pushes to master, and our release tags which

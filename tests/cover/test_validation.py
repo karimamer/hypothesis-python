@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -131,17 +131,6 @@ def test_list_unique_and_unique_by_cannot_both_be_enabled():
         boom()
     assert 'unique ' in e.value.args[0]
     assert 'unique_by' in e.value.args[0]
-
-
-def test_an_average_size_must_be_positive():
-    with pytest.raises(InvalidArgument):
-        lists(integers(), average_size=0.0).example()
-    with pytest.raises(InvalidArgument):
-        lists(integers(), average_size=-1.0).example()
-
-
-def test_an_average_size_may_be_zero_if_max_size_is():
-    lists(integers(), average_size=0.0, max_size=0)
 
 
 def test_min_before_max():

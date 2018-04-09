@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -33,7 +33,7 @@ def current_branch():
 def tags():
     result = [t.decode('ascii') for t in subprocess.check_output([
         'git', 'tag'
-    ]).split(b"\n")]
+    ]).split(b'\n')]
     assert len(set(result)) == len(result)
     return set(result)
 
@@ -120,7 +120,8 @@ def has_source_changes(version=None):
     point_of_divergence = merge_base('HEAD', version)
 
     return subprocess.call([
-        'git', 'diff', '--exit-code', point_of_divergence, 'HEAD', '--', SRC,
+        'git', 'diff', '--no-patch', '--exit-code', point_of_divergence,
+        'HEAD', '--', SRC,
     ]) != 0
 
 
@@ -161,7 +162,6 @@ def build_jobs():
     Note: This usage of Travis has been somewhat reverse engineered due
     to a certain dearth of documentation as to what values what takes
     when.
-
     """
     import requests
 
@@ -194,7 +194,7 @@ def modified_files():
         for l in diff_output.split('\n'):
             filepath = l.strip()
             if filepath:
-                assert os.path.exists(filepath)
+                assert os.path.exists(filepath), filepath
                 files.add(filepath)
     return files
 
@@ -324,6 +324,79 @@ def update_for_pending_release():
     git('add', CHANGELOG_FILE, VERSION_FILE)
 
     git(
-        'commit',
-        '-m', 'Bump version to %s and update changelog' % (__version__,)
+        'commit', '-m',
+        'Bump version to %s and update changelog\n\n[skip ci]' % (__version__,)
     )
+
+
+def could_affect_tests(path):
+    """Does this file have any effect on test results?"""
+    # RST files are the input to some tests -- in particular, the
+    # documentation build and doctests.  Both of those jobs are always run,
+    # so we can ignore their effect here.
+    #
+    # IPython notebooks aren't currently used in any tests.
+    if path.endswith(('.rst', '.ipynb')):
+        return False
+
+    # These files exist but have no effect on tests.
+    if path in ('CITATION', 'LICENSE.txt', ):
+        return False
+
+    # We default to marking a file "interesting" unless we know otherwise --
+    # it's better to run tests that could have been skipped than skip tests
+    # when they needed to be run.
+    return True
+
+
+def changed_files_from_master():
+    """Returns a list of files which have changed between a branch and
+    master."""
+    files = set()
+    command = ['git', 'diff', '--name-only', 'HEAD', 'master']
+    diff_output = subprocess.check_output(command).decode('ascii')
+    for line in diff_output.splitlines():
+        filepath = line.strip()
+        if filepath:
+            files.add(filepath)
+    return files
+
+
+def should_run_ci_task(task, is_pull_request):
+    """Given a task name, should we run this task?"""
+    if not is_pull_request:
+        print('We only skip tests if the job is a pull request.')
+        return True
+
+    # These tests are usually fast; we always run them rather than trying
+    # to keep up-to-date rules of exactly which changed files mean they
+    # should run.
+    if task in [
+        'check-pyup-yml',
+        'check-release-file',
+        'check-shellcheck',
+        'documentation',
+        'lint',
+    ]:
+        print('We always run the %s task.' % task)
+        return True
+
+    # The remaining tasks are all some sort of test of Hypothesis
+    # functionality.  Since it's better to run tests when we don't need to
+    # than skip tests when it was important, we remove any files which we
+    # know are safe to ignore, and run tests if there's anything left.
+    changed_files = changed_files_from_master()
+
+    interesting_changed_files = [
+        f for f in changed_files if could_affect_tests(f)
+    ]
+
+    if interesting_changed_files:
+        print(
+            'Changes to the following files mean we need to run tests: %s' %
+            ', '.join(interesting_changed_files)
+        )
+        return True
+    else:
+        print('There are no changes which would need a test run.')
+        return False

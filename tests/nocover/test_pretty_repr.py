@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -56,11 +56,10 @@ def builds_ignoring_invalid(target, *args, **kwargs):
 size_strategies = dict(
     min_size=st.integers(min_value=0, max_value=100) | st.none(),
     max_size=st.integers(min_value=0, max_value=100) | st.none(),
-    average_size=st.floats(min_value=0.0, max_value=100.0) | st.none()
 )
 
 
-values = st.integers() | st.text(average_size=2.0)
+values = st.integers() | st.text()
 
 
 Strategies = st.recursive(
@@ -77,16 +76,14 @@ Strategies = st.recursive(
         builds_ignoring_invalid(st.lists, x, **size_strategies),
         builds_ignoring_invalid(st.sets, x, **size_strategies),
         builds_ignoring_invalid(
-            lambda v: st.tuples(*v), st.lists(x, average_size=2.0)),
+            lambda v: st.tuples(*v), st.lists(x)),
         builds_ignoring_invalid(
             lambda v: st.one_of(*v),
-            st.lists(x, average_size=2.0, min_size=1)),
+            st.lists(x, min_size=1)),
         builds_ignoring_invalid(
             st.dictionaries, x, x,
             dict_class=st.sampled_from([dict, OrderedDict]),
-            min_size=st.integers(min_value=0, max_value=100) | st.none(),
-            max_size=st.integers(min_value=0, max_value=100) | st.none(),
-            average_size=st.floats(min_value=0.0, max_value=100.0) | st.none()
+            **size_strategies
         ),
         st.builds(lambda s, f: s.map(f), x, st.sampled_from(fns)),
     )

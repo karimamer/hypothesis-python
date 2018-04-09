@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -17,17 +17,15 @@
 
 from __future__ import division, print_function, absolute_import
 
-import math
 import decimal
 
 import pytest
 
 from hypothesis import given, assume, reject
 from hypothesis.errors import InvalidArgument
-from tests.common.utils import fails
+from tests.common.debug import find_any
 from hypothesis.strategies import data, none, tuples, decimals, integers, \
     fractions
-from hypothesis.internal.compat import float_to_decimal
 
 
 @given(data())
@@ -73,11 +71,11 @@ def test_fuzz_decimals_bounds(data):
         assert val.as_tuple().exponent == -places
 
 
-@fails
-@given(decimals())
-def test_all_decimals_can_be_exact_floats(x):
-    assume(x.is_finite())
-    assert float_to_decimal(float(x)) == x
+def test_all_decimals_can_be_exact_floats():
+    find_any(
+        decimals(),
+        lambda x: assume(x.is_finite()) and decimal.Decimal(float(x)) == x
+    )
 
 
 @given(fractions(), fractions(), fractions())
@@ -85,28 +83,22 @@ def test_fraction_addition_is_well_behaved(x, y, z):
     assert x + y + z == y + x + z
 
 
-@fails
-@given(decimals())
-def test_decimals_include_nan(x):
-    assert not math.isnan(x)
+def test_decimals_include_nan():
+    find_any(decimals(), lambda x: x.is_nan())
 
 
-@fails
-@given(decimals())
-def test_decimals_include_inf(x):
-    assume(not x.is_snan())
-    assert not math.isinf(x)
+def test_decimals_include_inf():
+    find_any(decimals(), lambda x: x.is_infinite())
 
 
 @given(decimals(allow_nan=False))
 def test_decimals_can_disallow_nan(x):
-    assert not math.isnan(x)
+    assert not x.is_nan()
 
 
 @given(decimals(allow_infinity=False))
 def test_decimals_can_disallow_inf(x):
-    assume(not x.is_snan())
-    assert not math.isinf(x)
+    assert not x.is_infinite()
 
 
 @pytest.mark.parametrize('places', range(10))
@@ -130,3 +122,13 @@ def test_issue_725_regression(x):
 @given(decimals(min_value='0.1', max_value='0.3'))
 def test_issue_739_regression(x):
     pass
+
+
+def test_consistent_decimal_error():
+    bad = 'invalid argument to Decimal'
+    with pytest.raises(InvalidArgument) as excinfo:
+        decimals(bad).example()
+    with pytest.raises(InvalidArgument) as excinfo2:
+        with decimal.localcontext(decimal.Context(traps=[])):
+            decimals(bad).example()
+    assert str(excinfo.value) == str(excinfo2.value)

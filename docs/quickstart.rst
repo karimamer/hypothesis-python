@@ -71,7 +71,8 @@ other ways you could have run it later).
 
 The text function returns what Hypothesis calls a search strategy. An object
 with methods that describe how to generate and simplify certain kinds of
-values. The @given decorator then takes our test function and turns it into a
+values. The :func:`@given <hypothesis.given>` decorator then takes our test
+function and turns it into a
 parametrized one which, when called, will run the test function over a wide
 range of matching data from that strategy.
 
@@ -216,13 +217,11 @@ also have run it explicitly ourselves:
   if __name__ == '__main__':
       test_decode_inverts_encode()
 
-We could also have done this as a unittest TestCase:
-
+We could also have done this as a :class:`python:unittest.TestCase`:
 
 .. code:: python
 
   import unittest
-
 
   class TestEncoding(unittest.TestCase):
       @given(text())
@@ -304,7 +303,7 @@ are some good starting points:
    the same thing with multiple different examples? Can you generalise that to
    a single test using Hypothesis?
 3. `This piece is designed for an F# implementation
-   <http://fsharpforfunandprofit.com/posts/property-based-testing-2/>`_, but
+   <https://fsharpforfunandprofit.com/posts/property-based-testing-2/>`_, but
    is still very good advice which you may find helps give you good ideas for
    using Hypothesis.
 

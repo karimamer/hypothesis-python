@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -52,19 +52,29 @@ def consistently_increment_time(monkeypatch):
     flakily.
 
     Replacing time with a fake version under our control avoids this problem.
-
     """
+    frozen = [False]
+
     current_time = [time_module.time()]
 
     def time():
-        current_time[0] += TIME_INCREMENT
+        if not frozen[0]:
+            current_time[0] += TIME_INCREMENT
         return current_time[0]
 
     def sleep(naptime):
         current_time[0] += naptime
 
+    def freeze():
+        frozen[0] = True
+
     monkeypatch.setattr(time_module, 'time', time)
+    try:
+        monkeypatch.setattr(time_module, 'monotonic', time)
+    except AttributeError:
+        assert sys.version_info[0] == 2
     monkeypatch.setattr(time_module, 'sleep', sleep)
+    monkeypatch.setattr(time_module, 'freeze', freeze, raising=False)
 
 
 if not IN_COVERAGE_TESTS:

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -29,7 +29,8 @@ from hypothesis.errors import InvalidState, InvalidArgument, \
 from tests.common.utils import checks_deprecated_behaviour
 from hypothesis.database import ExampleDatabase, \
     DirectoryBasedExampleDatabase
-from hypothesis._settings import Verbosity, settings, note_deprecation
+from hypothesis._settings import Verbosity, settings, default_variable, \
+    note_deprecation
 
 
 def test_has_docstrings():
@@ -94,6 +95,20 @@ def test_cannot_create_settings_with_invalid_options():
         settings(a_setting_with_limited_options=u'spoon')
 
 
+def test_cannot_register_with_parent_and_settings_args():
+    with pytest.raises(InvalidArgument):
+        settings.register_profile(
+            'conflicted', settings.default, settings=settings.default)
+    assert 'conflicted' not in settings._profiles
+
+
+@checks_deprecated_behaviour
+def test_register_profile_kwarg_settings_is_deprecated():
+    settings.register_profile('test', settings=settings(max_examples=10))
+    settings.load_profile('test')
+    assert settings.default.max_examples == 10
+
+
 def test_can_set_verbosity():
     settings(verbosity=Verbosity.quiet)
     settings(verbosity=Verbosity.normal)
@@ -121,20 +136,19 @@ def test_can_assign_database(db):
     assert x.database is db
 
 
+def test_will_reload_profile_when_default_is_absent():
+    original = settings.default
+    default_variable.value = None
+    assert settings.default is original
+
+
 def test_load_profile():
     settings.load_profile('default')
     assert settings.default.max_examples == 100
     assert settings.default.max_shrinks == 500
     assert settings.default.min_satisfying_examples == 5
 
-    settings.register_profile(
-        'test',
-        settings(
-            max_examples=10,
-            max_shrinks=5
-        )
-    )
-
+    settings.register_profile('test', settings(max_examples=10), max_shrinks=5)
     settings.load_profile('test')
 
     assert settings.default.max_examples == 10
@@ -146,6 +160,13 @@ def test_load_profile():
     assert settings.default.max_examples == 100
     assert settings.default.max_shrinks == 500
     assert settings.default.min_satisfying_examples == 5
+
+
+@checks_deprecated_behaviour
+def test_nonstring_profile_names_deprecated():
+    settings.register_profile(5, max_shrinks=5)
+    settings.load_profile(5)
+    assert settings.default.max_shrinks == 5
 
 
 def test_loading_profile_keeps_expected_behaviour():
@@ -208,10 +229,21 @@ def test_can_have_none_database():
     assert settings(database=None).database is None
 
 
+@pytest.mark.parametrize('db', [None, ExampleDatabase(':memory:')])
+def test_database_type_must_be_ExampleDatabase(db):
+    with settings(database=db):
+        settings_property_db = settings.database
+        with pytest.raises(InvalidArgument):
+            settings(database='.hypothesis/examples')
+        assert settings.database is settings_property_db
+
+
+@checks_deprecated_behaviour
 def test_can_have_none_database_file():
     assert settings(database_file=None).database is None
 
 
+@checks_deprecated_behaviour
 def test_can_override_database_file():
     f = mkdtemp()
     x = settings(database_file=f)
@@ -240,3 +272,58 @@ def test_does_not_warn_if_quiet():
 @given(st.builds(lambda: settings.default))
 def test_settings_in_strategies_are_from_test_scope(s):
     assert s.max_examples == 7
+
+
+@checks_deprecated_behaviour
+def test_settings_alone():
+    @settings()
+    def test_nothing():
+        pass
+    test_nothing()
+
+
+@checks_deprecated_behaviour
+def test_settings_applied_twice_1():
+    @given(st.integers())
+    @settings()
+    @settings()
+    def test_nothing(x):
+        pass
+    test_nothing()
+
+
+@checks_deprecated_behaviour
+def test_settings_applied_twice_2():
+    @settings()
+    @given(st.integers())
+    @settings()
+    def test_nothing(x):
+        pass
+    test_nothing()
+
+
+@checks_deprecated_behaviour
+def test_settings_applied_twice_3():
+    @settings()
+    @settings()
+    @given(st.integers())
+    def test_nothing(x):
+        pass
+    test_nothing()
+
+
+@settings()
+@given(st.integers())
+def test_outer_ok(x):
+    pass
+
+
+@given(st.integers())
+@settings()
+def test_inner_ok(x):
+    pass
+
+
+def test_settings_as_decorator_must_be_on_callable():
+    with pytest.raises(InvalidArgument):
+        settings()(1)

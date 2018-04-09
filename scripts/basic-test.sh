@@ -18,17 +18,7 @@ for k, v in sorted(dict(os.environ).items()):
 pip install .
 
 
-PYTEST="python -m pytest"
-
-$PYTEST tests/cover
-
-COVERAGE_TEST_TRACER=timid $PYTEST tests/cover
-
-if [ "$(python -c 'import sys; print(sys.version_info[0] == 2)')" = "True" ] ; then
-    $PYTEST tests/py2
-else
-    $PYTEST tests/py3
-fi
+PYTEST="python -m pytest -n2"
 
 $PYTEST --runpytest=subprocess tests/pytest
 
@@ -59,7 +49,7 @@ if [ "$(python -c 'import platform; print(platform.python_implementation())')" !
     pip install .[django]
     HYPOTHESIS_DJANGO_USETZ=TRUE python -m tests.django.manage test tests.django
     HYPOTHESIS_DJANGO_USETZ=FALSE python -m tests.django.manage test tests.django
-    pip uninstall -y django
+    pip uninstall -y django pytz
   fi
 
   if [ "$(python -c 'import sys; print(sys.version_info[:2] in ((2, 7), (3, 6)))')" = "True" ] ; then

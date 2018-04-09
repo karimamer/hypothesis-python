@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -47,15 +47,15 @@ class GenericCache(object):
 
     Implementations are expected to implement new_entry and optionally
     on_access and on_evict to implement a specific scoring strategy.
-
     """
+
     __slots__ = ('keys_to_indices', 'data', 'max_size')
 
     def __init__(self, max_size):
         self.max_size = max_size
 
         # Implementation: We store a binary heap of Entry objects in self.data,
-        # with the heap property requirnig that a parent's score is <= that of
+        # with the heap property requiring that a parent's score is <= that of
         # its children. keys_to_index then maps keys to their index in the
         # heap. We keep these two in sync automatically - the heap is never
         # reordered without updating the index.
@@ -116,7 +116,6 @@ class GenericCache(object):
         map.
 
         Returns the score to associate with the key.
-
         """
         raise NotImplementedError()
 
@@ -125,7 +124,6 @@ class GenericCache(object):
         written.
 
         Returns the new score for the key.
-
         """
         return score
 
@@ -139,9 +137,7 @@ class GenericCache(object):
 
         Asserts that all of the cache's invariants hold. When everything
         is working correctly this should be an expensive no-op.
-
         """
-
         for i, e in enumerate(self.data):
             assert self.keys_to_indices[e.key] == i
             for j in [i * 2 + 1, i * 2 + 2]:
@@ -160,7 +156,6 @@ class GenericCache(object):
         the heap property has been violated locally around i but previously
         held for all other indexes (and no other values have been modified),
         this fixes the heap so that the heap property holds everywhere."""
-
         while i > 0:
             parent = (i - 1) // 2
             if self.__out_of_order(parent, i):
@@ -187,9 +182,7 @@ class GenericCache(object):
         """Returns True if the indices i, j are in the wrong order.
 
         i must be the parent of j.
-
         """
-
         assert i == (j - 1) // 2
         return self.data[j].score < self.data[i].score
 
@@ -207,8 +200,8 @@ class LRUReusedCache(GenericCache):
     scan-resistance to the process: If we end up scanning through a large
     number of keys without reusing them, this does not evict the existing
     entries in preference for the new ones.
-
     """
+
     __slots__ = ('__tick',)
 
     def __init__(self, max_size, ):

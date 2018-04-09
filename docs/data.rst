@@ -19,6 +19,31 @@ module. The salient functions from it are as follows:
 .. automodule:: hypothesis.strategies
   :members:
 
+.. _shrinking:
+
+~~~~~~~~~
+Shrinking
+~~~~~~~~~
+
+When using strategies it is worth thinking about how the data *shrinks*.
+Shrinking is the process by which Hypothesis tries to produce human readable
+examples when it finds a failure - it takes a complex example and turns it
+into a simpler one.
+
+Each strategy defines an order in which it shrinks - you won't usually need to
+care about this much, but it can be worth being aware of as it can affect what
+the best way to write your own strategies is.
+
+The exact shrinking behaviour is not a guaranteed part of the API, but it
+doesn't change that often and when it does it's usually because we think the
+new way produces nicer examples.
+
+Possibly the most important one to be aware of is
+:func:`~hypothesis.strategies.one_of`, which has a preference for values
+produced by strategies earlier in its argument list. Most of the others should
+largely "do the right thing" without you having to think about it.
+
+
 ~~~~~~~~~~~~~~~~~~~
 Adapting strategies
 ~~~~~~~~~~~~~~~~~~~
@@ -42,11 +67,13 @@ e.g.:
 
 .. doctest::
 
-  >>> lists(integers()).map(sorted).example()
-  [-224, -222, 16, 159, 120699286316048]
+    >>> lists(integers()).map(sorted).example()
+    [-25527, -24245, -23118, -93, -70, -7, 0, 39, 40, 65, 88, 112, 6189, 9480, 19469, 27256, 32526, 1566924430]
 
 Note that many things that you might use mapping for can also be done with
 :func:`~hypothesis.strategies.builds`.
+
+.. _filtering:
 
 ---------
 Filtering
@@ -57,20 +84,20 @@ example of ``s`` such that ``f(example)`` is truthy.
 
 .. doctest::
 
-  >>> integers().filter(lambda x: x > 11).example()
-  1609027033942695427531
-  >>> integers().filter(lambda x: x > 11).example()
-  251
+    >>> integers().filter(lambda x: x > 11).example()
+    26126
+    >>> integers().filter(lambda x: x > 11).example()
+    23324
 
 It's important to note that ``filter`` isn't magic and if your condition is too
 hard to satisfy then this can fail:
 
 .. doctest::
 
-  >>> integers().filter(lambda x: False).example()
-  Traceback (most recent call last):
-    ...
-  hypothesis.errors.NoExamples: Could not find any valid examples in 20 tries
+    >>> integers().filter(lambda x: False).example()
+    Traceback (most recent call last):
+        ...
+    hypothesis.errors.NoExamples: Could not find any valid examples in 20 tries
 
 In general you should try to use ``filter`` only to avoid corner cases that you
 don't want rather than attempting to cut out a large chunk of the search space.
@@ -82,9 +109,8 @@ you wanted pairs of integers (x,y) such that x < y you could do the following:
 
 .. doctest::
 
-  >>> tuples(integers(), integers()).map(
-  ... lambda x: tuple(sorted(x))).filter(lambda x: x[0] != x[1]).example()
-  (180, 241)
+    >>> tuples(integers(), integers()).map(sorted).filter(lambda x: x[0] < x[1]).example()
+    [-8543729478746591815, 3760495307320535691]
 
 .. _flatmap:
 
@@ -104,16 +130,16 @@ length:
 
 .. code-block:: pycon
 
-  >>> rectangle_lists = integers(min_value=0, max_value=10).flatmap(
-  ... lambda n: lists(lists(integers(), min_size=n, max_size=n)))
-  >>> find(rectangle_lists, lambda x: True)
-  []
-  >>> find(rectangle_lists, lambda x: len(x) >= 10)
-  [[], [], [], [], [], [], [], [], [], []]
-  >>> find(rectangle_lists, lambda t: len(t) >= 3 and len(t[0]) >= 3)
-  [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
-  >>> find(rectangle_lists, lambda t: sum(len(s) for s in t) >= 10)
-  [[0], [0], [0], [0], [0], [0], [0], [0], [0], [0]]
+    >>> rectangle_lists = integers(min_value=0, max_value=10).flatmap(
+    ... lambda n: lists(lists(integers(), min_size=n, max_size=n)))
+    >>> find(rectangle_lists, lambda x: True)
+    []
+    >>> find(rectangle_lists, lambda x: len(x) >= 10)
+    [[], [], [], [], [], [], [], [], [], []]
+    >>> find(rectangle_lists, lambda t: len(t) >= 3 and len(t[0]) >= 3)
+    [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    >>> find(rectangle_lists, lambda t: sum(len(s) for s in t) >= 10)
+    [[0], [0], [0], [0], [0], [0], [0], [0], [0], [0]]
 
 In this example we first choose a length for our tuples, then we build a
 strategy which generates lists containing lists precisely of that length. The
@@ -150,27 +176,31 @@ returns a new strategy for it. So for example:
 
 .. doctest::
 
-  >>> from string import printable; from pprint import pprint
-  >>> json = recursive(none() | booleans() | floats() | text(printable),
-  ... lambda children: lists(children) | dictionaries(text(printable), children))
-  >>> pprint(json.example())
-  {'': 'Me$',
-   "\r5qPZ%etF:vL'9gC": False,
-   '$KsT(( J/(wQ': [],
-   '0)G&31': False,
-   '7': [],
-   'C.i]A-I': {':?Xh>[;': None,
-               'YHT\r!\x0b': -6.801160220000663e+18,
-  ...
-  >>> pprint(json.example())
-  [{"7_8'qyb": None,
-    ':': -0.3641507440748771,
-    'TI_^\n>L{T\x0c': -0.0,
-    'ZiOqQ\t': 'RKT*a]IjI/Zx2HB4ODiSUN)LsZ',
-    'n;E^^6|9=@g@@BmAi': '7j5\\'},
-   True]
-  >>> pprint(json.example())
-  []
+    >>> from string import printable; from pprint import pprint
+    >>> json = recursive(none() | booleans() | floats() | text(printable),
+    ... lambda children: lists(children) | dictionaries(text(printable), children))
+    >>> pprint(json.example())
+    ['dy',
+     [None, True, 6.297399055778002e+16, False],
+     {'a{h\\:694K~{mY>a1yA:#CmDYb': None},
+     '\\kP!4',
+     {'#1J1': '',
+      'cx.': None,
+      "jv'A?qyp_sB\n$62g": [],
+      'qgnP': [False, -inf, 'la)']},
+     [],
+     {}]
+    >>> pprint(json.example())
+    {'': None,
+     '(Rt)': 1.192092896e-07,
+     ',': [],
+     '6': 2.2250738585072014e-308,
+     'HA=/': [],
+     'YU]gy8': inf,
+     'l': None,
+     'nK': False}
+    >>> pprint(json.example())
+    []
 
 That is, we start with our leaf data and then we augment it by allowing lists and dictionaries of anything we can generate as JSON data.
 
@@ -180,13 +210,13 @@ we wanted to only generate really small JSON we could do this as:
 
 .. doctest::
 
-  >>> small_lists = recursive(booleans(), lists, max_leaves=5)
-  >>> small_lists.example()
-  True
-  >>> small_lists.example()
-  [True, False]
-  >>> small_lists.example()
-  True
+    >>> small_lists = recursive(booleans(), lists, max_leaves=5)
+    >>> small_lists.example()
+    [False]
+    >>> small_lists.example()
+    True
+    >>> small_lists.example()
+    []
 
 .. _composite-strategies:
 
@@ -220,12 +250,12 @@ accept all the others in the expected order. Defaults are preserved.
     >>> list_and_index()
     list_and_index()
     >>> list_and_index().example()
-    ([215, 112], 0)
+    ([-21904], 0)
 
     >>> list_and_index(booleans())
     list_and_index(elements=booleans())
     >>> list_and_index(booleans()).example()
-    ([False, False], 1)
+    ([True], 0)
 
 Note that the repr will work exactly like it does for all the built-in
 strategies: it will be a function that you can call to get the strategy in

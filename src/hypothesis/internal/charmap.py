@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -24,6 +24,7 @@ import pickle
 import tempfile
 import unicodedata
 
+from hypothesis._settings import note_deprecation
 from hypothesis.configuration import tmpdir, storage_directory
 from hypothesis.internal.compat import hunichr
 
@@ -44,7 +45,6 @@ def charmap():
 
     >>> charmap()['Co']
     ((57344, 63743), (983040, 1048573), (1048576, 1114109))
-
     """
     global _charmap
     # Best-effort caching in the face of missing files and/or unwritable
@@ -65,8 +65,8 @@ def charmap():
                     rs[-1][-1] += 1
                 else:
                     rs.append([i, i])
-            _charmap = {k: tuple((map(tuple, v)))
-                        for k, v in tmp_charmap.items()}
+            _charmap = {k: tuple(tuple(pair) for pair in pairs)
+                        for k, pairs in tmp_charmap.items()}
 
             try:
                 # Write the Unicode table atomically
@@ -87,11 +87,10 @@ _categories = None
 
 
 def categories():
-    """Return a list of Unicode categories in a normalised order.
+    """Return a tuple of Unicode categories in a normalised order.
 
     >>> categories() # doctest: +ELLIPSIS
-    ['Zl', 'Zp', 'Co', 'Me', 'Pc', ..., 'Cc', 'Cs']
-
+    ('Zl', 'Zp', 'Co', 'Me', 'Pc', ..., 'Cc', 'Cs')
     """
     global _categories
     if _categories is None:
@@ -103,7 +102,38 @@ def categories():
         _categories.remove('Cs')  # Other, Surrogate
         _categories.append('Cc')
         _categories.append('Cs')
-    return _categories
+    return tuple(_categories)
+
+
+def as_general_categories(cats, name='cats'):
+    """Return a tuple of Unicode categories in a normalised order.
+
+    This function expands one-letter designations of a major class to include
+    all subclasses:
+
+    >>> as_general_categories(['N'])
+    ('Nd', 'Nl', 'No')
+
+    See section 4.5 of the Unicode standard for more on classes:
+    https://www.unicode.org/versions/Unicode10.0.0/ch04.pdf
+
+    If the collection ``cats`` includes any elements that do not represent a
+    major class or a class with subclass, a deprecation warning is raised.
+    """
+    if cats is None:
+        return None
+    major_classes = ('L', 'M', 'N', 'P', 'S', 'Z', 'C')
+    cs = categories()
+    out = set(cats)
+    for c in cats:
+        if c in major_classes:
+            out.discard(c)
+            out.update(x for x in cs if x.startswith(c))
+        elif c not in cs:
+            note_deprecation(
+                'In %s=%r, %r is not a valid Unicode category.  This will '
+                'be an error in a future version.' % (name, cats, c))
+    return tuple(c for c in cs if c in out)
 
 
 def _union_intervals(x, y):
@@ -113,7 +143,6 @@ def _union_intervals(x, y):
 
     >>> _union_intervals([(3, 10)], [(1, 2), (5, 17)])
     ((1, 17),)
-
     """
     if not x:
         return tuple((u, v) for u, v in y)
@@ -141,15 +170,89 @@ def _union_intervals(x, y):
     return tuple(result)
 
 
+def _subtract_intervals(x, y):
+    """Set difference for lists of intervals. That is, returns a list of
+    intervals that bounds all values bounded by x that are not also bounded by
+    y. x and y are expected to be in sorted order.
+
+    For example _subtract_intervals([(1, 10)], [(2, 3), (9, 15)]) would
+    return [(1, 1), (4, 8)], removing the values 2, 3, 9 and 10 from the
+    interval.
+    """
+    if not y:
+        return tuple(x)
+    x = list(map(list, x))
+    i = 0
+    j = 0
+    result = []
+    while i < len(x) and j < len(y):
+        # Iterate in parallel over x and y. j stays pointing at the smallest
+        # interval in the left hand side that could still overlap with some
+        # element of x at index >= i.
+        # Similarly, i is not incremented until we know that it does not
+        # overlap with any element of y at index >= j.
+
+        xl, xr = x[i]
+        assert xl <= xr
+        yl, yr = y[j]
+        assert yl <= yr
+
+        if yr < xl:
+            # The interval at y[j] is strictly to the left of the interval at
+            # x[i], so will not overlap with it or any later interval of x.
+            j += 1
+        elif yl > xr:
+            # The interval at y[j] is strictly to the right of the interval at
+            # x[i], so all of x[i] goes into the result as no further intervals
+            # in y will intersect it.
+            result.append(x[i])
+            i += 1
+        elif yl <= xl:
+            if yr >= xr:
+                # x[i] is contained entirely in y[j], so we just skip over it
+                # without adding it to the result.
+                i += 1
+            else:
+                # The beginning of x[i] is contained in y[j], so we update the
+                # left endpoint of x[i] to remove this, and increment j as we
+                # now have moved past it. Note that this is not added to the
+                # result as is, as more intervals from y may intersect it so it
+                # may need updating further.
+                x[i][0] = yr + 1
+                j += 1
+        else:
+            # yl > xl, so the left hand part of x[i] is not contained in y[j],
+            # so there are some values we should add to the result.
+            result.append((xl, yl - 1))
+
+            if yr + 1 <= xr:
+                # If y[j] finishes before x[i] does, there may be some values
+                # in x[i] left that should go in the result (or they may be
+                # removed by a later interval in y), so we update x[i] to
+                # reflect that and increment j because it no longer overlaps
+                # with any remaining element of x.
+                x[i][0] = yr + 1
+                j += 1
+            else:
+                # Every element of x[i] other than the initial part we have
+                # already added is contained in y[j], so we move to the next
+                # interval.
+                i += 1
+    # Any remaining intervals in x do not overlap with any of y, as if they did
+    # we would not have incremented j to the end, so can be added to the result
+    # as they are.
+    result.extend(x[i:])
+    return tuple(map(tuple, result))
+
+
 def _intervals(s):
     """Return a tuple of intervals, covering the codepoints of characters in
     `s`.
 
     >>> _intervals('abcdef0123456789')
     ((48, 57), (97, 102))
-
     """
-    intervals = [(ord(c), ord(c)) for c in sorted(s)]
+    intervals = tuple((ord(c), ord(c)) for c in sorted(s))
     return _union_intervals(intervals, intervals)
 
 
@@ -165,9 +268,8 @@ def _category_key(exclude, include):
     If include is None then default to including all categories.
     Any item in include that is not a unicode character will be excluded.
 
-    >>> _category_key(exclude=['So'], include=['Lu', 'Me', 'Cs', 'So', 'Xx'])
+    >>> _category_key(exclude=['So'], include=['Lu', 'Me', 'Cs', 'So'])
     ('Me', 'Lu', 'Cs')
-
     """
     cs = categories()
     if include is None:
@@ -175,6 +277,8 @@ def _category_key(exclude, include):
     else:
         include = set(include)
     exclude = set(exclude or ())
+    assert include.issubset(cs)
+    assert exclude.issubset(cs)
     include -= exclude
     result = tuple(c for c in cs if c in include)
     return result
@@ -184,20 +288,17 @@ def _query_for_key(key):
     """Return a tuple of codepoint intervals covering characters that match one
     or more categories in the tuple of categories `key`.
 
-    >>> all_categories = tuple(categories())
-    >>> _query_for_key(all_categories)
+    >>> _query_for_key(categories())
     ((0, 1114111),)
     >>> _query_for_key(('Zl', 'Zp', 'Co'))
     ((8232, 8233), (57344, 63743), (983040, 1048573), (1048576, 1114109))
-
     """
     try:
         return category_index_cache[key]
     except KeyError:
         pass
     assert key
-    cs = categories()
-    if len(key) == len(cs):
+    if set(key) == set(categories()):
         result = ((0, sys.maxunicode),)
     else:
         result = _union_intervals(
@@ -214,7 +315,8 @@ def query(
     exclude_categories=(), include_categories=None,
     min_codepoint=None,
     max_codepoint=None,
-    include_characters=''
+    include_characters='',
+    exclude_characters='',
 ):
     """Return a tuple of intervals covering the codepoints for all characters
     that meet the critera (min_codepoint <= codepoint(c) <= max_codepoint and
@@ -230,7 +332,6 @@ def query(
     >>> query(min_codepoint=0, max_codepoint=128, include_categories=['Lu'],
     ...       include_characters=u'☃')
     ((65, 90), (9731, 9731))
-
     """
     if min_codepoint is None:
         min_codepoint = 0
@@ -238,7 +339,11 @@ def query(
         max_codepoint = sys.maxunicode
     catkey = _category_key(exclude_categories, include_categories)
     character_intervals = _intervals(include_characters or '')
-    qkey = (catkey, min_codepoint, max_codepoint, character_intervals)
+    exclude_intervals = _intervals(exclude_characters or '')
+    qkey = (
+        catkey, min_codepoint, max_codepoint,
+        character_intervals, exclude_intervals
+    )
     try:
         return limited_category_index_cache[qkey]
     except KeyError:
@@ -252,5 +357,6 @@ def query(
             ))
     result = tuple(result)
     result = _union_intervals(result, character_intervals)
+    result = _subtract_intervals(result, exclude_intervals)
     limited_category_index_cache[qkey] = result
     return result

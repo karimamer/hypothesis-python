@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,14 +19,14 @@ from __future__ import division, print_function, absolute_import
 
 import time
 
+import pytest
 from pytest import raises
 
-import hypothesis.reporting as reporting
 import hypothesis.strategies as st
 from hypothesis import HealthCheck, given, settings
-from hypothesis.errors import FailedHealthCheck
+from hypothesis.errors import InvalidArgument, FailedHealthCheck
 from hypothesis.control import assume
-from tests.common.utils import capture_out
+from tests.common.utils import checks_deprecated_behaviour
 from hypothesis.internal.compat import int_from_bytes
 from hypothesis.searchstrategy.strategies import SearchStrategy
 
@@ -35,6 +35,16 @@ def test_slow_generation_fails_a_health_check():
     @given(st.integers().map(lambda x: time.sleep(0.2)))
     def test(x):
         pass
+
+    with raises(FailedHealthCheck):
+        test()
+
+
+def test_slow_generation_inline_fails_a_health_check():
+    @settings(deadline=None)
+    @given(st.data())
+    def test(data):
+        data.draw(st.integers().map(lambda x: time.sleep(0.2)))
 
     with raises(FailedHealthCheck):
         test()
@@ -49,36 +59,6 @@ def test_default_health_check_can_weaken_specific():
 
     with settings(perform_health_check=False):
         test()
-
-
-def test_error_in_strategy_produces_health_check_error():
-    def boom(x):
-        raise ValueError()
-
-    @given(st.integers().map(boom))
-    def test(x):
-        pass
-
-    with raises(FailedHealthCheck) as e:
-        with reporting.with_reporter(reporting.default):
-            test()
-    assert 'executor' not in e.value.args[0]
-
-
-def test_suppressing_error_in_value_generation():
-    def boom(x):
-        raise ValueError()
-
-    @settings(suppress_health_check=[HealthCheck.exception_in_generation])
-    @given(st.integers().map(boom))
-    def test(x):
-        pass
-
-    with capture_out() as out:
-        with reporting.with_reporter(reporting.default):
-            with raises(ValueError):
-                test()
-    assert 'ValueError' not in out.getvalue()
 
 
 def test_suppressing_filtering_health_check():
@@ -107,25 +87,6 @@ def test_suppressing_filtering_health_check():
         test2()
 
 
-def test_error_in_strategy_with_custom_executor():
-    def boom(x):
-        raise ValueError()
-
-    class Foo(object):
-
-        def execute_example(self, f):
-            return f()
-
-        @given(st.integers().map(boom))
-        @settings(database=None)
-        def test(self, x):
-            pass
-
-    with raises(FailedHealthCheck) as e:
-        Foo().test()
-    assert 'executor' in e.value.args[0]
-
-
 def test_filtering_everything_fails_a_health_check():
     @given(st.integers().filter(lambda x: False))
     @settings(database=None)
@@ -145,10 +106,9 @@ class fails_regularly(SearchStrategy):
         print('ohai')
 
 
-@settings(max_shrinks=0)
 def test_filtering_most_things_fails_a_health_check():
     @given(fails_regularly())
-    @settings(database=None)
+    @settings(database=None, max_shrinks=0)
     def test(x):
         pass
 
@@ -158,7 +118,7 @@ def test_filtering_most_things_fails_a_health_check():
 
 
 def test_large_data_will_fail_a_health_check():
-    @given(st.lists(st.binary(min_size=1024, max_size=1024), average_size=100))
+    @given(st.lists(st.binary(min_size=1024)))
     @settings(database=None, buffer_size=1000)
     def test(x):
         pass
@@ -211,3 +171,42 @@ def test_returning_non_none_does_not_fail_if_health_check_disabled():
         return 1
 
     a()
+
+
+def test_large_base_example_fails_health_check():
+    @given(st.binary(min_size=7000, max_size=7000))
+    def test(b):
+        pass
+
+    with pytest.raises(FailedHealthCheck) as exc:
+        test()
+
+    assert exc.value.health_check == HealthCheck.large_base_example
+
+
+def test_example_that_shrinks_to_overrun_fails_health_check():
+    @given(st.binary(min_size=9000, max_size=9000) | st.none())
+    def test(b):
+        pass
+
+    with pytest.raises(FailedHealthCheck) as exc:
+        test()
+
+    assert exc.value.health_check == HealthCheck.large_base_example
+
+
+@pytest.mark.parametrize(
+    'check', [HealthCheck.random_module, HealthCheck.exception_in_generation])
+@checks_deprecated_behaviour
+def test_noop_health_checks(check):
+    settings(suppress_health_check=[check])
+
+
+def test_it_is_an_error_to_suppress_non_iterables():
+    with raises(InvalidArgument):
+        settings(suppress_health_check=1)
+
+
+@checks_deprecated_behaviour
+def test_is_is_deprecated_to_suppress_non_healthchecks():
+    settings(suppress_health_check=[1])

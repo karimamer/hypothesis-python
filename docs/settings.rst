@@ -45,7 +45,7 @@ Available settings
     :members: max_examples, max_iterations, min_satisfying_examples,
         max_shrinks, timeout, strict, database_file, stateful_step_count,
         database, perform_health_check, suppress_health_check, buffer_size,
-        phases, deadline, use_coverage
+        phases, deadline, use_coverage, derandomize
 
 .. _phases:
 
@@ -90,14 +90,24 @@ and :func:`@given <hypothesis.given>`.
     >>> from hypothesis import find, settings, Verbosity
     >>> from hypothesis.strategies import lists, booleans
     >>> find(lists(integers()), any, settings=settings(verbosity=Verbosity.verbose))
-    Found satisfying example [-208]
-    Shrunk example to [-208]
-    Shrunk example to [208]
+    Tried non-satisfying example []
+    Found satisfying example [-1198601713, -67, 116, -29578]
+    Shrunk example to [-67, 116, -29578]
+    Shrunk example to [116, -29578]
+    Shrunk example to [-29578]
+    Shrunk example to [-115]
+    Shrunk example to [115]
+    Shrunk example to [-57]
+    Shrunk example to [29]
+    Shrunk example to [-14]
+    Shrunk example to [-7]
+    Shrunk example to [4]
+    Shrunk example to [2]
     Shrunk example to [1]
     [1]
 
 The four levels are quiet, normal, verbose and debug. normal is the default,
-while in quiet Hypothesis will not print anything out, even the final
+while in quiet mode Hypothesis will not print anything out, not even the final
 falsifying example. debug is basically verbose but a bit more so. You probably
 don't want it.
 
@@ -106,7 +116,7 @@ You can also override the default by setting the environment variable
 setting ``HYPOTHESIS_VERBOSITY_LEVEL=verbose`` will run all your tests printing
 intermediate results and errors.
 
-If you are using ``pytest``, you may also need to
+If you are using :pypi:`pytest`, you may also need to
 :doc:`disable output capturing for passing tests <pytest:capture>`.
 
 -------------------------
@@ -119,14 +129,8 @@ values. Any absent ones will be set to defaults:
 .. doctest::
 
     >>> from hypothesis import settings
-    >>> settings()  # doctest: +ELLIPSIS, +NORMALIZE_WHITESPACE
-    settings(buffer_size=8192, database_file='...', derandomize=False,
-             max_examples=100, max_iterations=1000, max_mutations=10,
-             max_shrinks=500, min_satisfying_examples=5, perform_health_check=True,
-             phases=..., report_statistics=..., stateful_step_count=50, strict=...,
-             suppress_health_check=[], timeout=60, verbosity=Verbosity.normal)
     >>> settings().max_examples
-    200
+    100
     >>> settings(max_examples=10).max_examples
     10
 
@@ -164,13 +168,13 @@ also override them locally by using a settings object as a :ref:`context manager
 
 .. doctest::
 
-  >>> with settings(max_examples=150):
-  ...     print(settings.default.max_examples)
-  ...     print(settings().max_examples)
-  150
-  150
-  >>> settings().max_examples
-  200
+    >>> with settings(max_examples=150):
+    ...     print(settings.default.max_examples)
+    ...     print(settings().max_examples)
+    150
+    150
+    >>> settings().max_examples
+    100
 
 Note that after the block exits the default is returned to normal.
 
@@ -213,9 +217,9 @@ of tests that explicitly change the settings.
 .. doctest::
 
     >>> from hypothesis import settings
-    >>> settings.register_profile("ci", settings(max_examples=1000))
+    >>> settings.register_profile("ci", max_examples=1000)
     >>> settings().max_examples
-    200
+    100
     >>> settings.load_profile("ci")
     >>> settings().max_examples
     1000
@@ -225,10 +229,10 @@ specific tests.
 
 .. doctest::
 
-  >>> with settings.get_profile("ci"):
-  ...     print(settings().max_examples)
-  ...
-  1000
+    >>> with settings.get_profile("ci"):
+    ...     print(settings().max_examples)
+    ...
+    1000
 
 Optionally, you may define the environment variable to load a profile for you.
 This is the suggested pattern for running your tests on CI.
@@ -239,9 +243,9 @@ If this variable is not defined the Hypothesis defined defaults will be loaded.
 
     >>> import os
     >>> from hypothesis import settings, Verbosity
-    >>> settings.register_profile("ci", settings(max_examples=1000))
-    >>> settings.register_profile("dev", settings(max_examples=10))
-    >>> settings.register_profile("debug", settings(max_examples=10, verbosity=Verbosity.verbose))
+    >>> settings.register_profile("ci", max_examples=1000)
+    >>> settings.register_profile("dev", max_examples=10)
+    >>> settings.register_profile("debug", max_examples=10, verbosity=Verbosity.verbose)
     >>> settings.load_profile(os.getenv(u'HYPOTHESIS_PROFILE', 'default'))
 
 If you are using the hypothesis pytest plugin and your profiles are registered
@@ -256,13 +260,12 @@ by your conftest you can load one with the command line option ``--hypothesis-pr
 Timeouts
 ~~~~~~~~
 
-The `timeout` functionality of Hypothesis is being deprecated, and will
+The timeout functionality of Hypothesis is being deprecated, and will
 eventually be removed. For the moment, the timeout setting can still be set
 and the old default timeout of one minute remains.
 
 If you want to future proof your code you can get
-the future behaviour by setting it to the value `unlimited`, which you can
-import from the main Hypothesis package:
+the future behaviour by setting it to the value ``hypothesis.unlimited``.
 
 .. code:: python
 
@@ -275,7 +278,7 @@ import from the main Hypothesis package:
         ...
 
 This will cause your code to run until it hits the normal Hypothesis example
-limits, regardless of how long it takes. `timeout=unlimited` will remain a
+limits, regardless of how long it takes. ``timeout=unlimited`` will remain a
 valid setting after the timeout functionality has been deprecated (but will
 then have its own deprecation cycle).
 

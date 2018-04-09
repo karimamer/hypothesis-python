@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -30,7 +30,7 @@ from hypothesis.strategies import integers, floats, just, one_of, \
     none, randoms, builds, fixed_dictionaries, recursive
 
 
-__all__ = ['small_verifier', 'standard_types', 'OrderedPair', 'TIME_INCREMENT']
+__all__ = ['standard_types', 'OrderedPair', 'TIME_INCREMENT']
 
 OrderedPair = namedtuple('OrderedPair', ('left', 'right'))
 
@@ -42,7 +42,7 @@ ordered_pair = integers().flatmap(
 
 def constant_list(strat):
     return strat.flatmap(
-        lambda v: lists(just(v), average_size=10),
+        lambda v: lists(just(v)),
     )
 
 
@@ -54,7 +54,8 @@ def abc(x, y, z):
 
 
 standard_types = [
-    lists(max_size=0), tuples(), sets(max_size=0), frozensets(max_size=0),
+    lists(none(), max_size=0), tuples(),
+    sets(none(), max_size=0), frozensets(none(), max_size=0),
     fixed_dictionaries({}),
     abc(booleans(), booleans(), booleans()),
     abc(booleans(), booleans(), integers()),
@@ -81,9 +82,8 @@ standard_types = [
     complex_numbers(),
     fractions(),
     decimals(),
-    lists(lists(booleans(), average_size=10), average_size=10),
-    lists(lists(booleans(), average_size=100)),
-    lists(floats(0.0, 0.0), average_size=1.0),
+    lists(lists(booleans())),
+    lists(floats(0.0, 0.0)),
     ordered_pair, constant_list(integers()),
     integers().filter(lambda x: abs(x) > 100),
     floats(min_value=-sys.float_info.max, max_value=sys.float_info.max),

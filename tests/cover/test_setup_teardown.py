@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,8 +19,7 @@ from __future__ import division, print_function, absolute_import
 
 import pytest
 
-from hypothesis import given, assume, settings
-from hypothesis.errors import FailedHealthCheck
+from hypothesis import given, assume
 from hypothesis.strategies import text, integers
 
 
@@ -92,18 +91,9 @@ def test_calls_setup_and_teardown_on_failure():
     assert x.teardowns == x.setups
 
 
-def test_still_tears_down_on_failed_reify():
+def test_still_tears_down_on_error_in_generation():
     x = HasSetupAndTeardown()
     with pytest.raises(AttributeError):
-        with settings(perform_health_check=False):
-            x.fail_in_reify()
-    assert x.setups > 0
-    assert x.teardowns == x.setups
-
-
-def test_still_tears_down_on_failed_health_check():
-    x = HasSetupAndTeardown()
-    with pytest.raises(FailedHealthCheck):
         x.fail_in_reify()
     assert x.setups > 0
     assert x.teardowns == x.setups

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -82,11 +82,9 @@ def test_does_not_generate_surrogates(t):
 
 
 def test_does_not_simplify_into_surrogates():
-    f = find(text(average_size=25.0), lambda x: x >= u'\udfff')
+    f = find(text(), lambda x: x >= u'\udfff')
     assert f == u'\ue000'
-    f = find(
-        text(average_size=25.0),
-        lambda x: len([t for t in x if t >= u'\udfff']) >= 10)
+    f = find(text(min_size=10), lambda x: sum(t >= u'\udfff' for t in x) >= 10)
     assert f == u'\ue000' * 10
 
 
@@ -124,3 +122,8 @@ def test_fixed_size_bytes_just_draw_bytes():
     from hypothesis.internal.conjecture.data import ConjectureData
     x = ConjectureData.for_buffer(b'foo')
     assert x.draw(binary(min_size=3, max_size=3)) == b'foo'
+
+
+@given(text(max_size=10**6))
+def test_can_set_max_size_large(s):
+    pass

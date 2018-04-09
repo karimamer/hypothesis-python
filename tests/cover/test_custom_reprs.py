@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -37,8 +37,8 @@ def test_supports_positional_and_keyword_args_in_builds():
         'builds(hi, integers(), there=booleans())'
 
 
-def test_includes_a_trailing_comma_in_single_element_sampling():
-    assert repr(st.sampled_from([0])) == 'sampled_from((0,))'
+def test_preserves_sequence_type_of_argument():
+    assert repr(st.sampled_from([0])) == 'sampled_from([0])'
 
 
 class IHaveABadRepr(object):

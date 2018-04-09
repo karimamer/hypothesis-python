@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,9 +19,12 @@ from __future__ import division, print_function, absolute_import
 
 from unittest import TestCase as VanillaTestCase
 
+import pytest
 from django.db import IntegrityError
+from django.test import TestCase as DjangoTestCase
 
 from hypothesis import HealthCheck, given, settings
+from hypothesis.errors import InvalidArgument
 from hypothesis.strategies import integers
 from hypothesis.extra.django import TestCase, TransactionTestCase
 from hypothesis.internal.compat import PYPY
@@ -77,3 +80,14 @@ class TestWorkflow(VanillaTestCase):
         except IntegrityError:
             pass
         t.test_normal_test_1()
+
+    def test_given_needs_hypothesis_test_case(self):
+
+        class LocalTest(DjangoTestCase):
+
+            @given(integers())
+            def tst(self, i):
+                assert False, 'InvalidArgument should be raised in @given'
+
+        with pytest.raises(InvalidArgument):
+            LocalTest('tst').tst()

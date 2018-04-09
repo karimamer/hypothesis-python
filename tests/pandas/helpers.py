@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -28,7 +28,6 @@ PANDAS_TIME_DTYPES = tuple(map(np.dtype, [
 def supported_by_pandas(dtype):
     """Checks whether the dtype is one that can be correctly handled by
     Pandas."""
-
     # Pandas only supports a limited range of timedelta and datetime dtypes
     # compared to the full range that numpy supports and will convert
     # everything to those types (possibly increasing precision in the course of

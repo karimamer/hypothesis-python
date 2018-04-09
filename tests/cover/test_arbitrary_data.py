@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,8 +19,8 @@ from __future__ import division, print_function, absolute_import
 
 import pytest
 
-from hypothesis import strategies as st
 from hypothesis import find, given, reporting
+from hypothesis import strategies as st
 from hypothesis.errors import InvalidArgument
 from tests.common.utils import raises, capture_out
 
@@ -34,7 +34,7 @@ def test_conditional_draw(x, data):
 def test_prints_on_failure():
     @given(st.data())
     def test(data):
-        x = data.draw(st.lists(st.integers(), min_size=1))
+        x = data.draw(st.lists(st.integers(0, 10), min_size=2))
         y = data.draw(st.sampled_from(x))
         x.remove(y)
         if y in x:

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -33,9 +33,9 @@ from hypothesis.internal.compat import OrderedDict
 
 @pytest.mark.parametrize((u'col', u'strat'), [
     ((), tuples()),
-    ([], lists(max_size=0)),
-    (set(), sets(max_size=0)),
-    (frozenset(), frozensets(max_size=0)),
+    ([], lists(none(), max_size=0)),
+    (set(), sets(none(), max_size=0)),
+    (frozenset(), frozensets(none(), max_size=0)),
     ({}, fixed_dictionaries({})),
 ])
 def test_find_empty_collection_gives_empty(col, strat):
@@ -72,7 +72,7 @@ def test_minimizes_list_of_lists():
 
 def test_minimize_long_list():
     assert find(
-        lists(booleans(), average_size=100), lambda x: len(x) >= 70
+        lists(booleans(), min_size=50), lambda x: len(x) >= 70
     ) == [False] * 70
 
 
@@ -158,7 +158,7 @@ def test_minimize_dicts_with_incompatible_keys():
 
 
 def test_multiple_empty_lists_are_independent():
-    x = find(lists(lists(max_size=0)), lambda t: len(t) >= 2)
+    x = find(lists(lists(none(), max_size=0)), lambda t: len(t) >= 2)
     u, v = x
     assert u is not v
 

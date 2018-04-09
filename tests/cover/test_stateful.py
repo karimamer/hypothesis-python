@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -18,12 +18,12 @@
 from __future__ import division, print_function, absolute_import
 
 import inspect
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 import pytest
 
-from hypothesis import settings as Settings
 from hypothesis import assume
+from hypothesis import settings as Settings
 from hypothesis.errors import Flaky, InvalidDefinition
 from hypothesis.control import current_build_context
 from tests.common.utils import raises, capture_out, \
@@ -250,8 +250,8 @@ def test_bad_machines_fail(machine):
         raise
     v = o.getvalue()
     print_unicode(v)
-    assert u'Step #1' in v
-    assert u'Step #50' not in v
+    steps = [l for l in v.splitlines() if 'Step ' in l or 'state.' in l]
+    assert 1 <= len(steps) <= 50
 
 
 def test_multiple_rules_same_func():
@@ -266,7 +266,7 @@ def test_multiple_rules_same_func():
 class GivenLikeStateMachine(GenericStateMachine):
 
     def steps(self):
-        return lists(booleans(), average_size=25.0)
+        return lists(booleans())
 
     def execute_step(self, step):
         assume(any(step))
@@ -511,7 +511,7 @@ def test_saves_failing_example_in_database():
     with raises(AssertionError):
         run_state_machine_as_test(
             SetStateMachine, Settings(database=db))
-    assert len(list(db.data.keys())) == 2
+    assert any(list(db.data.values()))
 
 
 def test_can_run_with_no_db():
@@ -591,7 +591,6 @@ def test_invariant_precondition():
     """If an invariant precodition isn't met, the invariant isn't run.
 
     The precondition decorator can be applied in any order.
-
     """
     class Invariant(RuleBasedStateMachine):
 
@@ -680,3 +679,97 @@ def test_invariant_checks_initial_state():
 
     with pytest.raises(ValueError):
         run_state_machine_as_test(BadPrecondition)
+
+
+def test_always_runs_at_least_one_step():
+    class CountSteps(RuleBasedStateMachine):
+        def __init__(self):
+            super(CountSteps, self).__init__()
+            self.count = 0
+
+        @rule()
+        def do_something(self):
+            self.count += 1
+
+        def teardown(self):
+            assert self.count > 0
+
+    run_state_machine_as_test(CountSteps)
+
+
+def test_removes_needless_steps():
+    """Regression test from an example based on
+    tests/nocover/test_database_agreement.py, but without the expensive bits.
+    Comparing two database implementations in which deletion is broken, so as
+    soon as a key/value pair is successfully deleted the test will now fail if
+    you ever check that key.
+
+    The main interesting feature of this is that it has a lot of
+    opportunities to generate keys and values before it actually fails,
+    but will still fail with very high probability.
+    """
+    class IncorrectDeletion(RuleBasedStateMachine):
+        def __init__(self):
+            super(IncorrectDeletion, self).__init__()
+            self.__saved = defaultdict(set)
+            self.__deleted = defaultdict(set)
+
+        keys = Bundle('keys')
+        values = Bundle('values')
+
+        @rule(target=keys, k=binary())
+        def k(self, k):
+            return k
+
+        @rule(target=values, v=binary())
+        def v(self, v):
+            return v
+
+        @rule(k=keys, v=values)
+        def save(self, k, v):
+            self.__saved[k].add(v)
+
+        @rule(k=keys, v=values)
+        def delete(self, k, v):
+            if v in self.__saved[k]:
+                self.__deleted[k].add(v)
+
+        @rule(k=keys)
+        def values_agree(self, k):
+            assert not self.__deleted[k]
+
+    with capture_out() as o:
+        with pytest.raises(AssertionError):
+            run_state_machine_as_test(IncorrectDeletion)
+
+    assert o.getvalue().count(' = state.k(') == 1
+    assert o.getvalue().count(' = state.v(') == 1
+
+
+def test_prints_equal_values_with_correct_variable_name():
+    class MovesBetweenBundles(RuleBasedStateMachine):
+        b1 = Bundle('b1')
+        b2 = Bundle('b2')
+
+        @rule(target=b1)
+        def create(self):
+            return []
+
+        @rule(target=b2, source=b1)
+        def transfer(self, source):
+            return source
+
+        @rule(source=b2)
+        def fail(self, source):
+            assert False
+
+    with capture_out() as o:
+        with pytest.raises(AssertionError):
+            run_state_machine_as_test(MovesBetweenBundles)
+
+    result = o.getvalue()
+    for m in ['create', 'transfer', 'fail']:
+        assert result.count(m) == 1
+    assert 'v1 = state.create()' in result
+    assert 'v2 = state.transfer(source=v1)' in result
+    assert 'state.fail(source=v2)' in result

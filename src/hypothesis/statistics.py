@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -76,6 +76,18 @@ class Statistics(object):
             ) for e, c in sorted(
                 engine.event_call_counts.items(), key=lambda x: -x[1])
         ]
+
+        total_runtime = math.fsum(engine.all_runtimes)
+        total_drawtime = math.fsum(engine.all_drawtimes)
+
+        if total_drawtime == 0.0:
+            self.draw_time_percentage = '~ 0%'
+        else:
+            draw_time_percentage = 100.0 * min(
+                1, total_drawtime / total_runtime)
+
+            self.draw_time_percentage = '~ %d%%' % (
+                round(draw_time_percentage),)
 
 
 def note_engine_for_statistics(engine):

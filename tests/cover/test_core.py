@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -93,12 +93,6 @@ def test_is_not_normally_default():
 @some_normal_settings
 def test_settings_are_default_in_given(x):
     assert settings.default is some_normal_settings
-
-
-def test_settings_are_default_in_find():
-    find(
-        s.booleans(), lambda x: settings.default is some_normal_settings,
-        settings=some_normal_settings)
 
 
 def test_arc_is_memoized():

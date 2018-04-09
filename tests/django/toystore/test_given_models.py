@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -21,8 +21,9 @@ import datetime as dt
 from uuid import UUID
 
 from django.conf import settings as django_settings
+from django.contrib.auth.models import User
 
-from hypothesis import given, assume
+from hypothesis import HealthCheck, given, assume, settings
 from hypothesis.errors import InvalidArgument
 from hypothesis.strategies import just, lists
 from hypothesis.extra.django import TestCase, TransactionTestCase
@@ -57,12 +58,14 @@ class TestGetsBasicModels(TestCase):
             len({c.pk for c in companies}), len({c.name for c in companies})
         )
 
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     @given(models(Customer))
     def test_is_customer(self, customer):
         self.assertIsInstance(customer, Customer)
         self.assertIsNotNone(customer.pk)
         self.assertIsNotNone(customer.email)
 
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     @given(models(Customer))
     def test_tz_presence(self, customer):
         if django_settings.USE_TZ:
@@ -127,6 +130,11 @@ class TestGetsBasicModels(TestCase):
         assert isinstance(x.date, dt.date)
         assert isinstance(x.duration, dt.timedelta)
 
+    @given(models(Company))
+    def test_no_null_in_charfield(self, x):
+        # regression test for #1045.  Company just has a convenient CharField.
+        assert u'\x00' not in x.name
+
 
 class TestsNeedingRollback(TransactionTestCase):
 
@@ -150,3 +158,10 @@ class TestRestrictedFields(TestCase):
                          instance.choice_field_grouped.lower())
         self.assertEqual(instance.even_number_field % 2, 0)
         self.assertTrue(instance.non_blank_text_field)
+
+
+class TestValidatorInference(TestCase):
+
+    @given(models(User))
+    def test_user_issue_1112_regression(self, user):
+        assert user.username

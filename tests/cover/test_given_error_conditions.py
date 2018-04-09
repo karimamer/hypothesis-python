@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -23,7 +23,7 @@ import pytest
 
 from hypothesis import given, infer, assume, reject, settings
 from hypothesis.errors import Timeout, Unsatisfiable, InvalidArgument
-from tests.common.utils import validate_deprecation
+from tests.common.utils import fails_with, validate_deprecation
 from hypothesis.strategies import booleans, integers
 
 
@@ -41,7 +41,7 @@ def test_raises_timeout_on_slow_test():
 
 def test_raises_unsatisfiable_if_all_false():
     @given(integers())
-    @settings(max_examples=50)
+    @settings(max_examples=50, perform_health_check=False)
     def test_assume_false(x):
         reject()
 
@@ -80,3 +80,21 @@ def test_error_if_infer_is_posarg():
         pass
     with pytest.raises(InvalidArgument):
         inner()
+
+
+def test_given_twice_deprecated():
+    @given(booleans())
+    @given(integers())
+    def inner(a, b):
+        pass
+    with validate_deprecation():
+        inner()
+
+
+@fails_with(InvalidArgument)
+def test_given_is_not_a_class_decorator():
+    @given(integers())
+    class test_given_is_not_a_class_decorator():
+
+        def __init__(self, i):
+            pass

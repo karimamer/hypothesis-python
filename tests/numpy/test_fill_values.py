@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -23,7 +23,7 @@ from tests.common.debug import minimal, find_any
 from hypothesis.extra.numpy import arrays
 
 
-@given(arrays(object, 100, st.lists(max_size=0)))
+@given(arrays(object, 100, st.builds(list)))
 def test_generated_lists_are_distinct(ls):
     assert len(set(map(id, ls))) == len(ls)
 

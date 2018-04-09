@@ -7,6 +7,8 @@ any others please add them to the list! The only inclusion criterion right now i
 then it should be available on pypi.
 
 * `aur <https://github.com/cdown/aur>`_
+* `argon2_cffi <https://github.com/hynek/argon2_cffi>`_
+* `attrs <https://github.com/python-attrs/attrs>`_
 * `axelrod <https://github.com/Axelrod-Python/Axelrod>`_
 * `bidict <https://github.com/jab/bidict>`_
 * `binaryornot <https://github.com/audreyr/binaryornot>`_
@@ -24,6 +26,7 @@ then it should be available on pypi.
 * `into-dbus-python <https://github.com/stratis-storage/into-dbus-python>`_
 * `justbases <https://github.com/mulkieran/justbases>`_
 * `justbytes <https://github.com/mulkieran/justbytes>`_
+* `loris <https://github.com/loris-imageserver/loris>`_
 * `mariadb-dyncol <https://github.com/adamchainz/mariadb-dyncol>`_
 * `mercurial <https://www.mercurial-scm.org/>`_
 * `natsort <https://github.com/SethMMorton/natsort>`_

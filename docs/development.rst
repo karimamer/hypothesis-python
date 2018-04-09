@@ -2,7 +2,7 @@
 Ongoing Hypothesis Development
 ==============================
 
-Hypothesis development is managed by me, `David R. MacIver <http://www.drmaciver.com>`_.
+Hypothesis development is managed by me, `David R. MacIver <https://www.drmaciver.com>`_.
 I am the primary author of Hypothesis.
 
 *However*, I no longer do unpaid feature development on Hypothesis. My roles as leader of the project are:
@@ -26,12 +26,12 @@ details and :pull:`154` for an example of how the process goes). This isn't
 Release Policy
 ==============
 
-Hypothesis releases follow `semantic versioning <http://semver.org/>`_.
+Hypothesis releases follow `semantic versioning <https://semver.org/>`_.
 
 We maintain backwards-compatibility wherever possible, and use deprecation
 warnings to mark features that have been superseded by a newer alternative.
-If you want to detect this, the :py:meth:`strict setting <hypothesis.settings.strict>`
-upgrades all Hypothesis warnings to errors.
+If you want to detect this, you can
+:mod:`upgrade warnings to errors in the usual ways <python:warnings>`.
 
 We use continuous deployment to ensure that you can always use our newest and
 shiniest features - every change to the source tree is automatically built and
@@ -47,7 +47,7 @@ into our plans for future :doc:`compatibility <supported>` may be useful:
 
 - We value compatibility, and maintain it as far as practical.  This generally
   excludes things which are end-of-life upstream, or have an unstable API.
-- We would like to drop Python 2 support when it it reaches end of life in
+- We would like to drop Python 2 support when it reaches end of life in
   2020.  Ongoing support is likely to depend on commercial funding.
 - We intend to support PyPy3 as soon as it supports a recent enough version of
   Python 3.  See :issue:`602`.

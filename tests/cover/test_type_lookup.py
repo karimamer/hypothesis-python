@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -21,7 +21,8 @@ import pytest
 
 import hypothesis.strategies as st
 from hypothesis import given, infer
-from hypothesis.errors import InvalidArgument, ResolutionFailed
+from hypothesis.errors import InvalidArgument, ResolutionFailed, \
+    HypothesisDeprecationWarning
 from hypothesis.searchstrategy import types
 from hypothesis.internal.compat import PY2, integer_types
 
@@ -38,7 +39,7 @@ for thing in (getattr(st, name) for name in sorted(st._strategies)
             ex = thing(*([st.nothing()] * n)).example()
             types_with_core_strat.add(type(ex))
             break
-        except (TypeError, InvalidArgument):
+        except (TypeError, InvalidArgument, HypothesisDeprecationWarning):
             continue
 
 

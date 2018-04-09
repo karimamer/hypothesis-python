@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -21,11 +21,17 @@
 from __future__ import division, print_function, absolute_import
 
 import os
+import ast
 import sys
 import time
-import functools
+import zlib
+import base64
+import inspect
+import warnings
 import traceback
+import contextlib
 from random import Random
+from unittest import TestCase
 
 import attr
 from coverage import CoverageData
@@ -33,20 +39,22 @@ from coverage.files import canonical_filename
 from coverage.collector import Collector
 
 import hypothesis.strategies as st
+from hypothesis import __version__
 from hypothesis.errors import Flaky, Timeout, NoSuchExample, \
-    Unsatisfiable, InvalidArgument, DeadlineExceeded, MultipleFailures, \
-    FailedHealthCheck, UnsatisfiedAssumption, \
-    HypothesisDeprecationWarning
+    Unsatisfiable, DidNotReproduce, InvalidArgument, DeadlineExceeded, \
+    MultipleFailures, FailedHealthCheck, HypothesisWarning, \
+    UnsatisfiedAssumption, HypothesisDeprecationWarning
 from hypothesis.control import BuildContext
-from hypothesis._settings import settings as Settings
 from hypothesis._settings import Phase, Verbosity, HealthCheck, \
-    note_deprecation
-from hypothesis.executors import new_style_executor, \
-    default_new_style_executor
+    PrintSettings
+from hypothesis._settings import settings as Settings
+from hypothesis._settings import note_deprecation
+from hypothesis.executors import new_style_executor
 from hypothesis.reporting import report, verbose_report, current_verbosity
 from hypothesis.statistics import note_engine_for_statistics
-from hypothesis.internal.compat import ceil, str_to_bytes, \
-    get_type_hints, getfullargspec, encoded_filepath
+from hypothesis.internal.compat import ceil, hbytes, qualname, \
+    str_to_bytes, benchmark_time, get_type_hints, getfullargspec, \
+    encoded_filepath, bad_django_TestCase
 from hypothesis.internal.coverage import IN_COVERAGE_TESTS
 from hypothesis.utils.conventions import infer, not_set
 from hypothesis.internal.escalation import is_hypothesis_file, \
@@ -55,11 +63,11 @@ from hypothesis.internal.reflection import is_mock, proxies, nicerepr, \
     arg_string, impersonate, function_digest, fully_qualified_name, \
     define_function_signature, convert_positional_arguments, \
     get_pretty_function_description
-from hypothesis.internal.conjecture.data import Status, StopTest, \
-    ConjectureData
+from hypothesis.internal.healthcheck import fail_health_check
+from hypothesis.internal.conjecture.data import StopTest, ConjectureData
 from hypothesis.searchstrategy.strategies import SearchStrategy
 from hypothesis.internal.conjecture.engine import ExitReason, \
-    ConjectureRunner, uniform, sort_key
+    ConjectureRunner, sort_key
 
 try:
     from coverage.tracer import CFileDisposition as FileDisposition
@@ -74,18 +82,6 @@ global_force_seed = None
 def new_random():
     import random
     return random.Random(random.getrandbits(128))
-
-
-def test_is_flaky(test, expected_repr):
-    @functools.wraps(test)
-    def test_or_flaky(*args, **kwargs):
-        text_repr = arg_string(test, args, kwargs)
-        raise Flaky(
-            (
-                'Hypothesis %s(%s) produces unreliable results: Falsified'
-                ' on the first call but did not on a subsequent one'
-            ) % (test.__name__, text_repr,))
-    return test_or_flaky
 
 
 @attr.s()
@@ -113,37 +109,6 @@ def example(*args, **kwargs):
     return accept
 
 
-def reify_and_execute(
-    search_strategy, test,
-    print_example=False,
-    is_final=False, collector=None
-):
-    def run(data):
-        with BuildContext(data, is_final=is_final):
-            import random as rnd_module
-            rnd_module.seed(0)
-            args, kwargs = data.draw(search_strategy)
-
-            if print_example:
-                report(
-                    lambda: 'Falsifying example: %s(%s)' % (
-                        test.__name__, arg_string(test, args, kwargs)))
-            elif current_verbosity() >= Verbosity.verbose:
-                report(
-                    lambda: 'Trying example: %s(%s)' % (
-                        test.__name__, arg_string(test, args, kwargs)))
-            if collector is None:
-                return test(*args, **kwargs)
-            else:  # pragma: no cover
-                try:
-                    collector.start()
-                    return test(*args, **kwargs)
-                finally:
-                    collector.stop()
-
-    return run
-
-
 def seed(seed):
     """seed: Start the test execution from a specific seed.
 
@@ -154,11 +119,57 @@ def seed(seed):
     derandomize setting if it is present.
 
     """
-
     def accept(test):
         test._hypothesis_internal_use_seed = seed
         return test
     return accept
+
+
+def reproduce_failure(version, blob):
+    """Run the example that corresponds to this data blob in order to reproduce
+    a failure.
+
+    A test with this decorator *always* runs only one example and always fails.
+    If the provided example does not cause a failure, or is in some way invalid
+    for this test, then this will fail with a DidNotReproduce error.
+
+    This decorator is not intended to be a permanent addition to your test
+    suite. It's simply some code you can add to ease reproduction of a problem
+    in the event that you don't have access to the test database. Because of
+    this, *no* compatibility guarantees are made between different versions of
+    Hypothesis - its API may change arbitrarily from version to version.
+    """
+    def accept(test):
+        test._hypothesis_internal_use_reproduce_failure = (version, blob)
+        return test
+    return accept
+
+
+def encode_failure(buffer):
+    buffer = bytes(buffer)
+    compressed = zlib.compress(buffer)
+    if len(compressed) < len(buffer):
+        buffer = b'\1' + compressed
+    else:
+        buffer = b'\0' + buffer
+    return base64.b64encode(buffer)
+
+
+def decode_failure(blob):
+    try:
+        buffer = base64.b64decode(blob)
+    except Exception:
+        raise InvalidArgument('Invalid base64 encoded string: %r' % (blob,))
+    prefix = buffer[:1]
+    if prefix == b'\0':
+        return buffer[1:]
+    elif prefix == b'\1':
+        return zlib.decompress(buffer[1:])
+    else:
+        raise InvalidArgument(
+            'Could not decode blob %r: Invalid start byte %r' % (
+                blob, prefix
+            ))
 
 
 class WithRunner(SearchStrategy):
@@ -279,151 +290,6 @@ def execute_explicit_examples(
             raise
 
 
-def fail_health_check(settings, message, label):
-    # Tell pytest to omit the body of this function from tracebacks
-    # http://doc.pytest.org/en/latest/example/simple.html#writing-well-integrated-assertion-helpers
-    __tracebackhide__ = True
-
-    if label in settings.suppress_health_check:
-        return
-    if not settings.perform_health_check:
-        return
-    message += (
-        '\nSee https://hypothesis.readthedocs.io/en/latest/health'
-        'checks.html for more information about this. '
-    )
-    message += (
-        'If you want to disable just this health check, add %s '
-        'to the suppress_health_check settings for this test.'
-    ) % (label,)
-    raise FailedHealthCheck(message)
-
-
-def perform_health_checks(random, settings, test_runner, search_strategy):
-    # Tell pytest to omit the body of this function from tracebacks
-    __tracebackhide__ = True
-    if not settings.perform_health_check:
-        return
-    if not Settings.default.perform_health_check:
-        return
-
-    health_check_random = Random(random.getrandbits(128))
-    # We "pre warm" the health check with one draw to give it some
-    # time to calculate any cached data. This prevents the case
-    # where the first draw of the health check takes ages because
-    # of loading unicode data the first time.
-    data = ConjectureData(
-        max_length=settings.buffer_size,
-        draw_bytes=lambda data, n: uniform(health_check_random, n)
-    )
-    with Settings(settings, verbosity=Verbosity.quiet):
-        try:
-            test_runner(data, reify_and_execute(
-                search_strategy,
-                lambda *args, **kwargs: None,
-            ))
-        except BaseException:
-            pass
-    count = 0
-    overruns = 0
-    filtered_draws = 0
-    start = time.time()
-    while (
-        count < 10 and time.time() < start + 1 and
-        filtered_draws < 50 and overruns < 20
-    ):
-        try:
-            data = ConjectureData(
-                max_length=settings.buffer_size,
-                draw_bytes=lambda data, n: uniform(health_check_random, n)
-            )
-            with Settings(settings, verbosity=Verbosity.quiet):
-                test_runner(data, reify_and_execute(
-                    search_strategy,
-                    lambda *args, **kwargs: None,
-                ))
-            count += 1
-        except UnsatisfiedAssumption:
-            filtered_draws += 1
-        except StopTest:
-            if data.status == Status.INVALID:
-                filtered_draws += 1
-            else:
-                assert data.status == Status.OVERRUN
-                overruns += 1
-        except InvalidArgument:
-            raise
-        except Exception:
-            escalate_hypothesis_internal_error()
-            if (
-                HealthCheck.exception_in_generation in
-                settings.suppress_health_check
-            ):
-                raise
-            report(traceback.format_exc())
-            if test_runner is default_new_style_executor:
-                fail_health_check(
-                    settings,
-                    'An exception occurred during data '
-                    'generation in initial health check. '
-                    'This indicates a bug in the strategy. '
-                    'This could either be a Hypothesis bug or '
-                    "an error in a function you've passed to "
-                    'it to construct your data.',
-                    HealthCheck.exception_in_generation,
-                )
-            else:
-                fail_health_check(
-                    settings,
-                    'An exception occurred during data '
-                    'generation in initial health check. '
-                    'This indicates a bug in the strategy. '
-                    'This could either be a Hypothesis bug or '
-                    'an error in a function you\'ve passed to '
-                    'it to construct your data. Additionally, '
-                    'you have a custom executor, which means '
-                    'that this could be your executor failing '
-                    'to handle a function which returns None. ',
-                    HealthCheck.exception_in_generation,
-                )
-    if overruns >= 20 or (
-        not count and overruns > 0
-    ):
-        fail_health_check(settings, (
-            'Examples routinely exceeded the max allowable size. '
-            '(%d examples overran while generating %d valid ones)'
-            '. Generating examples this large will usually lead to'
-            ' bad results. You should try setting average_size or '
-            'max_size parameters on your collections and turning '
-            'max_leaves down on recursive() calls.') % (
-            overruns, count
-        ), HealthCheck.data_too_large)
-    if filtered_draws >= 50 or (
-        not count and filtered_draws > 0
-    ):
-        fail_health_check(settings, (
-            'It looks like your strategy is filtering out a lot '
-            'of data. Health check found %d filtered examples but '
-            'only %d good ones. This will make your tests much '
-            'slower, and also will probably distort the data '
-            'generation quite a lot. You should adapt your '
-            'strategy to filter less. This can also be caused by '
-            'a low max_leaves parameter in recursive() calls') % (
-            filtered_draws, count
-        ), HealthCheck.filter_too_much)
-    runtime = time.time() - start
-    if runtime > 1.0 or count < 10:
-        fail_health_check(settings, (
-            'Data generation is extremely slow: Only produced '
-            '%d valid examples in %.2f seconds (%d invalid ones '
-            'and %d exceeded maximum size). Try decreasing '
-            "size of the data you're generating (with e.g."
-            'average_size or max_leaves parameters).'
-        ) % (count, runtime, filtered_draws, overruns),
-            HealthCheck.too_slow,
-        )
-
-
 def get_random_for_wrapped_test(test, wrapped_test):
     settings = wrapped_test._hypothesis_internal_use_settings
     wrapped_test._hypothesis_internal_use_generated_seed = None
@@ -487,7 +353,6 @@ def skip_exceptions_to_reraise():
 
     This is intended to cover most common test runners; if you would
     like another to be added please open an issue or pull request.
-
     """
     import unittest
     # This is a set because nose may simply re-export unittest.SkipTest
@@ -527,9 +392,6 @@ def new_given_argspec(original_argspec, generator_kwargs):
     annots['return'] = None
     return original_argspec._replace(
         args=new_args, kwonlyargs=new_kwonlyargs, annotations=annots)
-
-
-HUNG_TEST_TIME_LIMIT = 5 * 60
 
 
 ROOT = os.path.dirname(__file__)
@@ -580,57 +442,48 @@ FORCE_PURE_TRACER = os.getenv('HYPOTHESIS_FORCE_PURE_TRACER') == 'true'
 
 class StateForActualGivenExecution(object):
 
-    def __init__(self, test_runner, search_strategy, test, settings, random):
+    def __init__(
+        self, test_runner, search_strategy, test, settings, random, had_seed
+    ):
         self.test_runner = test_runner
         self.search_strategy = search_strategy
         self.settings = settings
         self.at_least_one_success = False
         self.last_exception = None
-        self.repr_for_last_exception = None
         self.falsifying_examples = ()
         self.__was_flaky = False
         self.random = random
         self.__warned_deadline = False
         self.__existing_collector = None
         self.__test_runtime = None
-        self.__in_final_replay = False
+        self.__had_seed = had_seed
 
-        if self.settings.deadline is None:
-            self.test = test
-        else:
-            @proxies(test)
-            def timed_test(*args, **kwargs):
-                self.__test_runtime = None
-                start = time.time()
-                result = test(*args, **kwargs)
-                runtime = (time.time() - start) * 1000
-                self.__test_runtime = runtime
-                if self.settings.deadline is not_set:
-                    if (
-                        not self.__warned_deadline and
-                        runtime >= 200
-                    ):
-                        self.__warned_deadline = True
-                        note_deprecation((
-                            'Test took %.2fms to run. In future the default '
-                            'deadline setting will be 200ms, which will '
-                            'make this an error. You can set deadline to '
-                            'an explicit value of e.g. %d to turn tests '
-                            'slower than this into an error, or you can set '
-                            'it to None to disable this check entirely.') % (
-                                runtime, ceil(runtime / 100) * 100,
-                        ))
-                elif runtime >= self.current_deadline:
-                    raise DeadlineExceeded(runtime, self.settings.deadline)
-                return result
-            self.test = timed_test
+        self.test = test
 
         self.coverage_data = CoverageData()
         self.files_to_propagate = set()
+        self.failed_normally = False
+
+        self.used_examples_from_database = False
 
         if settings.use_coverage and not IN_COVERAGE_TESTS:  # pragma: no cover
             if Collector._collectors:
-                self.hijack_collector(Collector._collectors[-1])
+                parent = Collector._collectors[-1]
+
+                # We include any files the collector has already decided to
+                # trace whether or not on re-investigation we still think it
+                # wants to trace them. The reason for this is that in some
+                # cases coverage gets the wrong answer when we run it
+                # ourselves due to reasons that are our fault but are hard to
+                # fix (we lie about where certain functions come from).
+                # This causes us to not record the actual test bodies as
+                # covered. But if we intended to trace test bodies then the
+                # file must already have been traced when getting to this point
+                # and so will already be in the collector's data. Hence we can
+                # use that information to get the correct answer here.
+                # See issue 997 for more context.
+                self.files_to_propagate = set(parent.data)
+                self.hijack_collector(parent)
 
             self.collector = Collector(
                 branch=True,
@@ -649,13 +502,112 @@ class StateForActualGivenExecution(object):
         else:
             self.collector = None
 
-    @property
-    def current_deadline(self):
-        base = self.settings.deadline
-        if self.__in_final_replay:
-            return base
+    def execute(
+        self, data,
+        print_example=False,
+        is_final=False,
+        expected_failure=None, collect=False,
+    ):
+        text_repr = [None]
+        if self.settings.deadline is None:
+            test = self.test
         else:
-            return base * 1.25
+            @proxies(self.test)
+            def test(*args, **kwargs):
+                self.__test_runtime = None
+                initial_draws = len(data.draw_times)
+                start = benchmark_time()
+                result = self.test(*args, **kwargs)
+                finish = benchmark_time()
+                internal_draw_time = sum(data.draw_times[initial_draws:])
+                runtime = (finish - start - internal_draw_time) * 1000
+                self.__test_runtime = runtime
+                if self.settings.deadline is not_set:
+                    if (
+                        not self.__warned_deadline and
+                        runtime >= 200
+                    ):
+                        self.__warned_deadline = True
+                        note_deprecation((
+                            'Test took %.2fms to run. In future the default '
+                            'deadline setting will be 200ms, which will '
+                            'make this an error. You can set deadline to '
+                            'an explicit value of e.g. %d to turn tests '
+                            'slower than this into an error, or you can set '
+                            'it to None to disable this check entirely.') % (
+                                runtime, ceil(runtime / 100) * 100,
+                        ))
+                else:
+                    current_deadline = self.settings.deadline
+                    if not is_final:
+                        current_deadline *= 1.25
+                    if runtime >= current_deadline:
+                        raise DeadlineExceeded(runtime, self.settings.deadline)
+                return result
+
+        def run(data):
+            if not hasattr(data, 'can_reproduce_example_from_repr'):
+                data.can_reproduce_example_from_repr = True
+            with self.settings:
+                with BuildContext(data, is_final=is_final):
+                    import random as rnd_module
+                    rnd_module.seed(0)
+                    args, kwargs = data.draw(self.search_strategy)
+                    if expected_failure is not None:
+                        text_repr[0] = arg_string(test, args, kwargs)
+
+                    if print_example:
+                        example = '%s(%s)' % (
+                            test.__name__, arg_string(test, args, kwargs))
+                        try:
+                            ast.parse(example)
+                        except SyntaxError:
+                            data.can_reproduce_example_from_repr = False
+                        report('Falsifying example: %s' % (example,))
+                    elif current_verbosity() >= Verbosity.verbose:
+                        report(
+                            lambda: 'Trying example: %s(%s)' % (
+                                test.__name__, arg_string(test, args, kwargs)))
+
+                    if self.collector is None or not collect:
+                        return test(*args, **kwargs)
+                    else:  # pragma: no cover
+                        try:
+                            self.collector.start()
+                            return test(*args, **kwargs)
+                        finally:
+                            self.collector.stop()
+
+        result = self.test_runner(data, run)
+        if expected_failure is not None:
+            exception, traceback = expected_failure
+            if (
+                isinstance(
+                    exception,
+                    DeadlineExceeded
+                ) and self.__test_runtime is not None
+            ):
+                report((
+                    'Unreliable test timings! On an initial run, this '
+                    'test took %.2fms, which exceeded the deadline of '
+                    '%.2fms, but on a subsequent run it took %.2f ms, '
+                    'which did not. If you expect this sort of '
+                    'variability in your test timings, consider turning '
+                    'deadlines off for this test by setting deadline=None.'
+                ) % (
+                    exception.runtime,
+                    self.settings.deadline, self.__test_runtime
+                ))
+            else:
+                report(
+                    'Failed to reproduce exception. Expected: \n' +
+                    traceback,
+                )
+            self.__flaky((
+                'Hypothesis %s(%s) produces unreliable results: Falsified'
+                ' on the first call but did not on a subsequent one'
+            ) % (test.__name__, text_repr[0],))
+        return result
 
     def should_trace(self, original_filename, frame):  # pragma: no cover
         disp = FileDisposition()
@@ -687,34 +639,23 @@ class StateForActualGivenExecution(object):
                 covdata.add_arcs({
                     filename: {
                         arc: None
-                        for arc in self.coverage_data.arcs(filename)}
+                        for arc in self.coverage_data.arcs(filename) or ()}
                     for filename in self.files_to_propagate
                 })
             else:
                 covdata.add_lines({
                     filename: {
                         line: None
-                        for line in self.coverage_data.lines(filename)}
+                        for line in self.coverage_data.lines(filename) or ()}
                     for filename in self.files_to_propagate
                 })
             collector.save_data = original_save_data
         collector.save_data = save_data
 
     def evaluate_test_data(self, data):
-        if (
-            time.time() - self.start_time >= HUNG_TEST_TIME_LIMIT
-        ):
-            fail_health_check(self.settings, (
-                'Your test has been running for at least five minutes. This '
-                'is probably not what you intended, so by default Hypothesis '
-                'turns it into an error.'
-            ), HealthCheck.hung_test)
-
         try:
             if self.collector is None:
-                result = self.test_runner(data, reify_and_execute(
-                    self.search_strategy, self.test,
-                ))
+                result = self.execute(data)
             else:  # pragma: no cover
                 # This should always be a no-op, but the coverage tracer has
                 # a bad habit of resurrecting itself.
@@ -722,10 +663,7 @@ class StateForActualGivenExecution(object):
                 sys.settrace(None)
                 try:
                     self.collector.data = {}
-                    result = self.test_runner(data, reify_and_execute(
-                        self.search_strategy, self.test,
-                        collector=self.collector
-                    ))
+                    result = self.execute(data, collect=True)
                 finally:
                     sys.settrace(original)
                     covdata = CoverageData()
@@ -768,7 +706,10 @@ class StateForActualGivenExecution(object):
     def run(self):
         # Tell pytest to omit the body of this function from tracebacks
         __tracebackhide__ = True
-        database_key = str_to_bytes(fully_qualified_name(self.test))
+        if global_force_seed is None:
+            database_key = str_to_bytes(fully_qualified_name(self.test))
+        else:
+            database_key = None
         self.start_time = time.time()
         global in_given
         runner = ConjectureRunner(
@@ -788,10 +729,31 @@ class StateForActualGivenExecution(object):
             finally:
                 in_given = False
                 sys.settrace(original_trace)
+                self.used_examples_from_database = \
+                    runner.used_examples_from_database
         note_engine_for_statistics(runner)
         run_time = time.time() - self.start_time
+
+        self.used_examples_from_database = runner.used_examples_from_database
+
+        if runner.used_examples_from_database:
+            if self.settings.derandomize:
+                note_deprecation(
+                    'In future derandomize will imply database=None, but your '
+                    'test is currently using examples from the database. To '
+                    'get the future behaviour, update your settings to '
+                    'include database=None.'
+                )
+            if self.__had_seed:
+                note_deprecation(
+                    'In future use of @seed will imply database=None in your '
+                    'settings, but your test is currently using examples from '
+                    'the database. To get the future behaviour, update your '
+                    'settings for this test to include database=None.'
+                )
+
         timed_out = runner.exit_reason == ExitReason.timeout
-        if runner.last_data is None:
+        if runner.call_count == 0:
             return
         if runner.interesting_examples:
             self.falsifying_examples = sorted(
@@ -841,83 +803,61 @@ class StateForActualGivenExecution(object):
         if not self.falsifying_examples:
             return
 
+        self.failed_normally = True
+
         flaky = 0
 
-        self.__in_final_replay = True
-
         for falsifying_example in self.falsifying_examples:
+            ran_example = ConjectureData.for_buffer(falsifying_example.buffer)
             self.__was_flaky = False
-            raised_exception = False
+            assert falsifying_example.__expected_exception is not None
             try:
-                with self.settings:
-                    self.test_runner(
-                        ConjectureData.for_buffer(falsifying_example.buffer),
-                        reify_and_execute(
-                            self.search_strategy, self.test,
-                            print_example=True, is_final=True
-                        ))
+                self.execute(
+                    ran_example,
+                    print_example=True, is_final=True,
+                    expected_failure=(
+                        falsifying_example.__expected_exception,
+                        falsifying_example.__expected_traceback,
+                    )
+                )
             except (UnsatisfiedAssumption, StopTest):
                 report(traceback.format_exc())
                 self.__flaky(
                     'Unreliable assumption: An example which satisfied '
                     'assumptions on the first run now fails it.'
                 )
-            except:
+            except BaseException:
                 if len(self.falsifying_examples) <= 1:
                     raise
-                raised_exception = True
                 report(traceback.format_exc())
-
-            if not raised_exception:
-                if (
-                    isinstance(
-                        falsifying_example.__expected_exception,
-                        DeadlineExceeded
-                    ) and self.__test_runtime is not None
-                ):
-                    report((
-                        'Unreliable test timings! On an initial run, this '
-                        'test took %.2fms, which exceeded the deadline of '
-                        '%.2fms, but on a subsequent run it took %.2f ms, '
-                        'which did not. If you expect this sort of '
-                        'variability in your test timings, consider turning '
-                        'deadlines off for this test by setting deadline=None.'
-                    ) % (
-                        falsifying_example.__expected_exception.runtime,
-                        self.settings.deadline, self.__test_runtime
-                    ))
-                else:
-                    report(
-                        'Failed to reproduce exception. Expected: \n' +
-                        falsifying_example.__expected_traceback,
-                    )
-
-                filter_message = (
-                    'Unreliable test data: Failed to reproduce a failure '
-                    'and then when it came to recreating the example in '
-                    'order to print the test data with a flaky result '
-                    'the example was filtered out (by e.g. a '
-                    'call to filter in your strategy) when we didn\'t '
-                    'expect it to be.'
-                )
-
-                try:
-                    self.test_runner(
-                        ConjectureData.for_buffer(falsifying_example.buffer),
-                        reify_and_execute(
-                            self.search_strategy,
-                            test_is_flaky(
-                                self.test, self.repr_for_last_exception),
-                            print_example=True, is_final=True
-                        ))
-                except (UnsatisfiedAssumption, StopTest):
-                    self.__flaky(filter_message)
-                except Flaky as e:
-                    if len(self.falsifying_examples) > 1:
-                        self.__flaky(e.args[0])
-                    else:
-                        raise
-
+            finally:  # pragma: no cover
+                # This section is in fact entirely covered by the tests in
+                # test_reproduce_failure, but it seems to trigger a lovely set
+                # of coverage bugs: The branches show up as uncovered (despite
+                # definitely being covered - you can add an assert False else
+                # branch to verify this and see it fail - and additionally the
+                # second branch still complains about lack of coverage even if
+                # you add a pragma: no cover to it!
+                # See https://bitbucket.org/ned/coveragepy/issues/623/
+                if self.settings.print_blob is not PrintSettings.NEVER:
+                    failure_blob = encode_failure(falsifying_example.buffer)
+                    # Have to use the example we actually ran, not the original
+                    # falsifying example! Otherwise we won't catch problems
+                    # where the repr of the generated example doesn't parse.
+                    can_use_repr = ran_example.can_reproduce_example_from_repr
+                    if (
+                        self.settings.print_blob is PrintSettings.ALWAYS or (
+                            self.settings.print_blob is PrintSettings.INFER and
+                            not can_use_repr and
+                            len(failure_blob) < 200
+                        )
+                    ):
+                        report((
+                            '\n'
+                            'You can reproduce this example by temporarily '
+                            'adding @reproduce_failure(%r, %r) as a decorator '
+                            'on your test case') % (
+                                __version__, failure_blob,))
             if self.__was_flaky:
                 flaky += 1
 
@@ -943,14 +883,38 @@ class StateForActualGivenExecution(object):
             report('Flaky example! ' + message)
 
 
+@contextlib.contextmanager
+def fake_subTest(self, msg=None, **__):
+    """Monkeypatch for `unittest.TestCase.subTest` during `@given`.
+
+    If we don't patch this out, each failing example is reported as a
+    seperate failing test by the unittest test runner, which is
+    obviously incorrect. We therefore replace it for the duration with
+    this version.
+    """
+    warnings.warn(
+        'subTest per-example reporting interacts badly with Hypothesis '
+        'trying hundreds of examples, so we disable it for the duration of '
+        'any test that uses `@given`.', HypothesisWarning, stacklevel=2
+    )
+    yield
+
+
 def given(*given_arguments, **given_kwargs):
     """A decorator for turning a test function that accepts arguments into a
     randomized test.
 
     This is the main entry point to Hypothesis.
-
     """
     def run_test_with_generator(test):
+        if hasattr(test, '_hypothesis_internal_test_function_without_warning'):
+            # Pull out the original test function to avoid the warning we
+            # stuck in about using @settings without @given.
+            test = test._hypothesis_internal_test_function_without_warning
+        if inspect.isclass(test):
+            # Provide a meaningful error to users, instead of exceptions from
+            # internals that assume we're dealing with a function.
+            raise InvalidArgument('@given cannot be applied to a class.')
         generator_arguments = tuple(given_arguments)
         generator_kwargs = dict(given_kwargs)
 
@@ -977,6 +941,17 @@ def given(*given_arguments, **given_kwargs):
             # Tell pytest to omit the body of this function from tracebacks
             __tracebackhide__ = True
 
+            if getattr(test, 'is_hypothesis_test', False):
+                note_deprecation((
+                    'You have applied @given to a test more than once. In '
+                    'future this will be an error. Applying @given twice '
+                    'wraps the test twice, which can be extremely slow. A '
+                    'similar effect can be gained by combining the arguments '
+                    'to the two calls to given. For example, instead of '
+                    '@given(booleans()) @given(integers()), you could write '
+                    '@given(booleans(), integers())'
+                ))
+
             settings = wrapped_test._hypothesis_internal_use_settings
 
             random = get_random_for_wrapped_test(test, wrapped_test)
@@ -997,6 +972,61 @@ def given(*given_arguments, **given_kwargs):
             )
             arguments, kwargs, test_runner, search_strategy = processed_args
 
+            runner = getattr(search_strategy, 'runner', None)
+            if isinstance(runner, TestCase) and test.__name__ in dir(TestCase):
+                msg = ('You have applied @given to the method %s, which is '
+                       'used by the unittest runner but is not itself a test.'
+                       '  This is not useful in any way.' % test.__name__)
+                fail_health_check(settings, msg, HealthCheck.not_a_test_method)
+            if bad_django_TestCase(runner):  # pragma: no cover
+                # Covered by the Django tests, but not the pytest coverage task
+                raise InvalidArgument(
+                    'You have applied @given to a method on %s, but this '
+                    'class does not inherit from the supported versions in '
+                    '`hypothesis.extra.django`.  Use the Hypothesis variants '
+                    'to ensure that each example is run in a separate '
+                    'database transaction.' % qualname(type(runner))
+                )
+
+            state = StateForActualGivenExecution(
+                test_runner, search_strategy, test, settings, random,
+                had_seed=wrapped_test._hypothesis_internal_use_seed
+            )
+
+            reproduce_failure = \
+                wrapped_test._hypothesis_internal_use_reproduce_failure
+
+            if reproduce_failure is not None:
+                expected_version, failure = reproduce_failure
+                if expected_version != __version__:
+                    raise InvalidArgument((
+                        'Attempting to reproduce a failure from a different '
+                        'version of Hypothesis. This failure is from %s, but '
+                        'you are currently running %r. Please change your '
+                        'Hypothesis version to a matching one.'
+                    ) % (expected_version, __version__))
+                try:
+                    state.execute(ConjectureData.for_buffer(
+                        decode_failure(failure)),
+                        print_example=True, is_final=True,
+                    )
+                    raise DidNotReproduce(
+                        'Expected the test to raise an error, but it '
+                        'completed successfully.'
+                    )
+                except StopTest:
+                    raise DidNotReproduce(
+                        'The shape of the test data has changed in some way '
+                        'from where this blob was defined. Are you sure '
+                        "you're running the same test?"
+                    )
+                except UnsatisfiedAssumption:
+                    raise DidNotReproduce(
+                        'The test data failed to satisfy an assumption in the '
+                        'test. Have you added it since this blob was '
+                        'generated?'
+                    )
+
             execute_explicit_examples(
                 test_runner, test, wrapped_test, settings, arguments, kwargs
             )
@@ -1011,16 +1041,19 @@ def given(*given_arguments, **given_kwargs):
                 return
 
             try:
-                perform_health_checks(
-                    random, settings, test_runner, search_strategy)
-
-                state = StateForActualGivenExecution(
-                    test_runner, search_strategy, test, settings, random)
-                state.run()
-            except:
+                if isinstance(runner, TestCase) and hasattr(runner, 'subTest'):
+                    subTest = runner.subTest
+                    try:
+                        setattr(runner, 'subTest', fake_subTest)
+                        state.run()
+                    finally:
+                        setattr(runner, 'subTest', subTest)
+                else:
+                    state.run()
+            except BaseException:
                 generated_seed = \
                     wrapped_test._hypothesis_internal_use_generated_seed
-                if generated_seed is not None:
+                if generated_seed is not None and not state.failed_normally:
                     if running_under_pytest:
                         report((
                             'You can add @seed(%(seed)d) to this test or run '
@@ -1037,12 +1070,18 @@ def given(*given_arguments, **given_kwargs):
             if not (attrib.startswith('_') or hasattr(wrapped_test, attrib)):
                 setattr(wrapped_test, attrib, getattr(test, attrib))
         wrapped_test.is_hypothesis_test = True
+        if hasattr(test, '_hypothesis_internal_settings_applied'):
+            # Used to check if @settings is applied twice.
+            wrapped_test._hypothesis_internal_settings_applied = True
         wrapped_test._hypothesis_internal_use_seed = getattr(
             test, '_hypothesis_internal_use_seed', None
         )
         wrapped_test._hypothesis_internal_use_settings = getattr(
             test, '_hypothesis_internal_use_settings', None
         ) or Settings.default
+        wrapped_test._hypothesis_internal_use_reproduce_failure = getattr(
+            test, '_hypothesis_internal_use_reproduce_failure', None
+        )
         return wrapped_test
     return run_test_with_generator
 
@@ -1055,6 +1094,7 @@ def find(specifier, condition, settings=None, random=None, database_key=None):
         min_satisfying_examples=0,
         max_shrinks=2000,
     )
+    settings = Settings(settings, perform_health_check=False)
 
     if database_key is None and settings.database is not None:
         database_key = function_digest(condition)
@@ -1071,6 +1111,7 @@ def find(specifier, condition, settings=None, random=None, database_key=None):
     random = random or new_random()
     successful_examples = [0]
     last_data = [None]
+    last_repr = [None]
 
     def template_condition(data):
         with BuildContext(data):
@@ -1087,19 +1128,20 @@ def find(specifier, condition, settings=None, random=None, database_key=None):
 
         if settings.verbosity == Verbosity.verbose:
             if not successful_examples[0]:
-                report(lambda: u'Trying example %s' % (
-                    nicerepr(result),
-                ))
+                report(
+                    u'Tried non-satisfying example %s' % (nicerepr(result),))
             elif success:
                 if successful_examples[0] == 1:
-                    report(lambda: u'Found satisfying example %s' % (
-                        nicerepr(result),
-                    ))
-                else:
-                    report(lambda: u'Shrunk example to %s' % (
-                        nicerepr(result),
-                    ))
-                last_data[0] = data
+                    last_repr[0] = nicerepr(result)
+                    report(u'Found satisfying example %s' % (last_repr[0],))
+                    last_data[0] = data
+                elif (
+                    sort_key(hbytes(data.buffer)) <
+                    sort_key(last_data[0].buffer)
+                ) and nicerepr(result) != last_repr[0]:
+                    last_repr[0] = nicerepr(result)
+                    report(u'Shrunk example to %s' % (last_repr[0],))
+                    last_data[0] = data
         if success and not data.frozen:
             data.mark_interesting()
     start = time.time()
@@ -1110,8 +1152,9 @@ def find(specifier, condition, settings=None, random=None, database_key=None):
     runner.run()
     note_engine_for_statistics(runner)
     run_time = time.time() - start
-    if runner.last_data.status == Status.INTERESTING:
-        data = ConjectureData.for_buffer(runner.last_data.buffer)
+    if runner.interesting_examples:
+        data = ConjectureData.for_buffer(
+            list(runner.interesting_examples.values())[0].buffer)
         with BuildContext(data):
             return data.draw(search)
     if (

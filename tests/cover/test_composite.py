@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -129,3 +129,18 @@ def test_can_shrink_matrices_with_length_param():
     assert len(value) == 2
     assert len(value[0]) == 2
     assert sorted(value[0] + value[1]) == [0, 0, 0, 1]
+
+
+class MyList(list):
+    pass
+
+
+@given(st.data(), st.lists(st.integers()).map(MyList))
+def test_does_not_change_arguments(data, ls):
+    # regression test for issue #1017 or other argument mutation
+    @st.composite
+    def strat(draw, arg):
+        return arg
+
+    ex = data.draw(strat(ls))
+    assert ex is ls

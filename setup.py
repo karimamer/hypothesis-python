@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,8 +19,9 @@ from __future__ import division, print_function, absolute_import
 
 import os
 import sys
+import warnings
 
-from setuptools import setup, find_packages
+import setuptools
 
 
 def local_file(name):
@@ -29,6 +30,16 @@ def local_file(name):
 
 SOURCE = local_file('src')
 README = local_file('README.rst')
+
+setuptools_version = tuple(map(int, setuptools.__version__.split('.')[:2]))
+
+if setuptools_version < (36, 2):
+    # Warning only - very bad if uploading bdist but fine if installing sdist.
+    warnings.warn(
+        'This version of setuptools is too old to correctly store '
+        'conditional dependencies in binary wheels.  For more info, see:  '
+        'https://hynek.me/articles/conditional-python-dependencies/'
+    )
 
 
 # Assignment to placate pyflakes. The actual version is from the exec that
@@ -42,31 +53,37 @@ assert __version__ is not None
 
 
 extras = {
-    'datetime':  ['pytz'],
-    'pytz':  ['pytz'],
-    'fakefactory': ['Faker>=0.7.0,<=0.7.1'],
-    'django': ['pytz', 'django>=1.8,<2'],
+    'datetime': ['pytz'],
+    'pytz': ['pytz'],
+    'fakefactory': ['Faker>=0.7'],
     'numpy': ['numpy>=1.9.0'],
     'pytest': ['pytest>=2.8.0'],
+    # We only support Django versions with upstream support - see
+    # https://www.djangoproject.com/download/#supported-versions
+    'django': ['pytz', 'django>=1.11'],
 }
 
 extras['faker'] = extras['fakefactory']
-
 extras['all'] = sorted(sum(extras.values(), []))
 
-extras[":python_version == '2.7'"] = ['enum34']
 
-install_requires = ['attrs', 'coverage']
-
-if sys.version_info[0] < 3:
+install_requires = ['attrs>=16.0.0', 'coverage']
+# Using an environment marker on enum34 makes the dependency condition
+# independent of the build environemnt, which is important for wheels.
+# https://www.python.org/dev/peps/pep-0345/#environment-markers
+if sys.version_info[0] < 3 and setuptools_version < (8, 0):
+    # Except really old systems, where we give up and install unconditionally
     install_requires.append('enum34')
+else:
+    install_requires.append('enum34; python_version=="2.7"')
 
-setup(
+
+setuptools.setup(
     name='hypothesis',
     version=__version__,
     author='David R. MacIver',
     author_email='david@drmaciver.com',
-    packages=find_packages(SOURCE),
+    packages=setuptools.find_packages(SOURCE),
     package_dir={'': SOURCE},
     url='https://github.com/HypothesisWorks/hypothesis-python',
     license='MPL v2',

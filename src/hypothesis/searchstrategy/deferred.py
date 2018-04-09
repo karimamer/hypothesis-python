@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -25,7 +25,6 @@ from hypothesis.searchstrategy.strategies import SearchStrategy
 
 
 class DeferredStrategy(SearchStrategy):
-
     """A strategy which may be used before it is fully defined."""
 
     def __init__(self, definition):
@@ -64,6 +63,19 @@ class DeferredStrategy(SearchStrategy):
     @property
     def supports_find(self):
         return self.wrapped_strategy.supports_find
+
+    def calc_label(self):
+        """Deferred strategies don't have a calculated label, because we would
+        end up having to calculate the fixed point of some hash function in
+        order to calculate it when they recursively refer to themself!
+
+        The label for the wrapped strategy will still appear because it
+        will be passed to draw.
+        """
+        # This is actually the same as the parent class implementation, but we
+        # include it explicitly here in order to document that this is a
+        # deliberate decision.
+        return self.class_label
 
     def calc_is_empty(self, recur):
         return recur(self.wrapped_strategy)

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,16 +19,15 @@
 
 from __future__ import division, print_function, absolute_import
 
-import os
 import re
 import sys
 import math
+import time
+import array
 import codecs
 import platform
 import importlib
 from base64 import b64encode
-from decimal import Context, Decimal, Inexact
-from hashlib import sha1
 from collections import namedtuple
 
 try:
@@ -55,10 +54,6 @@ def bit_length(n):
     return n.bit_length()
 
 
-def float_to_decimal(f):
-    return Decimal(f)
-
-
 if PY3:
     def str_to_bytes(s):
         return s.encode(a_good_encoding())
@@ -72,7 +67,6 @@ if PY3:
     ARG_NAME_ATTRIBUTE = 'arg'
     integer_types = (int,)
     hunichr = chr
-    from functools import reduce
 
     def unicode_safe_repr(x):
         return repr(x)
@@ -97,14 +91,8 @@ def quiet_raise(exc):
     def int_to_bytes(i, size):
         return i.to_bytes(size, 'big')
 
-    def bytes_from_list(ls):
-        return bytes(ls)
-
     def to_bytes_sequence(ls):
         return bytes(ls)
-
-    def zero_byte_sequence(n):
-        return bytes(n)
 
     def int_to_byte(i):
         return bytes([i])
@@ -114,7 +102,8 @@ def quiet_raise(exc):
     struct_pack = struct.pack
     struct_unpack = struct.unpack
 
-    from time import monotonic as benchmark_time
+    def benchmark_time():
+        return time.monotonic()
 else:
     import struct
 
@@ -128,15 +117,14 @@ else:
         def struct_unpack(fmt, string):
             return struct.unpack(fmt, str(string))
 
-    def zero_byte_sequence(n):
-        return hbytes(b'\0' * n)
-
     def int_from_bytes(data):
-        assert isinstance(data, bytearray)
         if CAN_UNPACK_BYTE_ARRAY:
             unpackable_data = data
-        else:
+        elif isinstance(data, bytearray):
             unpackable_data = bytes(data)
+        else:
+            unpackable_data = data
+        assert isinstance(data, (bytes, bytearray))
         result = 0
         i = 0
         while i + 4 <= len(data):
@@ -162,9 +150,6 @@ else:
         return hbytes(result)
 
     int_to_byte = chr
-
-    def bytes_from_list(ls):
-        return hbytes(bytearray(ls))
 
     def to_bytes_sequence(ls):
         return bytearray(ls)
@@ -227,7 +212,6 @@ else:
     ARG_NAME_ATTRIBUTE = 'id'
     integer_types = (int, long)
     hunichr = unichr
-    reduce = reduce
 
     def escape_unicode_characters(s):
         return codecs.encode(s, 'string_escape')
@@ -240,7 +224,8 @@ else:
     def quiet_raise(exc):
         raise exc
 
-    from time import time as benchmark_time
+    def benchmark_time():
+        return time.time()
 
 
 # coverage mixes unicode and str filepaths on Python 2, which causes us
@@ -293,22 +278,6 @@ if PY2:
                            getattr(func, '__annotations__', {}))
 else:
     from inspect import getfullargspec, FullArgSpec
-
-    if sys.version_info[:2] == (3, 5):
-        # silence deprecation warnings on Python 3.5
-        # (un-deprecated in 3.6 to allow single-source 2/3 code like this)
-        def silence_warnings(func):
-            import warnings
-            import functools
-
-            @functools.wraps(func)
-            def inner(*args, **kwargs):
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore', DeprecationWarning)
-                    return func(*args, **kwargs)
-            return inner
-
-        getfullargspec = silence_warnings(getfullargspec)
 
 
 if sys.version_info[:2] < (3, 6):
@@ -380,7 +349,6 @@ def update_code_location(code, newfile, newlineno):
     hack that I've done purely for vanity, and if you're reading this
     code you're probably here because it's broken something and now
     you're angry at me. Sorry.
-
     """
     unpacked = [
         getattr(code, name) for name in CODE_FIELD_ORDER
@@ -549,3 +517,20 @@ if PY2:
         return hbytes(base(s))
 else:
     from base64 import b64decode
+
+
+_cases = []
+
+
+def bad_django_TestCase(runner):
+    if runner is None:
+        return False
+    if not _cases:
+        try:
+            from django.test import TransactionTestCase
+            from hypothesis.extra.django import HypothesisTestCase
+            _cases[:] = TransactionTestCase, HypothesisTestCase
+        except Exception:
+            # Can't use ImportError, because of e.g. Django config errors
+            _cases[:] = (), type
+    return isinstance(runner, _cases[0]) and not isinstance(runner, _cases[1])

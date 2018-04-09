@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -20,30 +20,27 @@ from __future__ import division, print_function, absolute_import
 import re
 import sys
 import operator
-import sre_parse as sre
+import sre_parse
+import sre_constants as sre
 
 import hypothesis.strategies as st
 from hypothesis import reject
 from hypothesis.internal.compat import PY3, hrange, hunichr, text_type, \
     int_to_byte
+from hypothesis.internal.charmap import categories, as_general_categories
 
 HAS_SUBPATTERN_FLAGS = sys.version_info[:2] >= (3, 6)
 
 
-UNICODE_CATEGORIES = set([
-    'Cf', 'Cn', 'Co', 'LC', 'Ll', 'Lm', 'Lo', 'Lt', 'Lu',
-    'Mc', 'Me', 'Mn', 'Nd', 'Nl', 'No', 'Pc', 'Pd', 'Pe',
-    'Pf', 'Pi', 'Po', 'Ps', 'Sc', 'Sk', 'Sm', 'So', 'Zl',
-    'Zp', 'Zs',
-])
+UNICODE_CATEGORIES = set(categories())
 
 
 SPACE_CHARS = set(u' \t\n\r\f\v')
 UNICODE_SPACE_CHARS = SPACE_CHARS | set(u'\x1c\x1d\x1e\x1f\x85')
 UNICODE_DIGIT_CATEGORIES = set(['Nd'])
-UNICODE_SPACE_CATEGORIES = set(['Zs', 'Zl', 'Zp'])
-UNICODE_LETTER_CATEGORIES = set(['LC', 'Ll', 'Lm', 'Lo', 'Lt', 'Lu'])
-UNICODE_WORD_CATEGORIES = UNICODE_LETTER_CATEGORIES | set(['Nd', 'Nl', 'No'])
+UNICODE_SPACE_CATEGORIES = set(as_general_categories('Z'))
+UNICODE_LETTER_CATEGORIES = set(as_general_categories('L'))
+UNICODE_WORD_CATEGORIES = set(as_general_categories(['L', 'N']))
 
 # This is verbose, but correct on all versions of Python
 BYTES_ALL = set(int_to_byte(i) for i in range(256))
@@ -120,7 +117,6 @@ class CharactersBuilder(object):
     :param negate: If True, configure :func:`hypothesis.strategies.characters`
         to match anything other than configured character set
     :param flags: Regex flags. They affect how and which characters are matched
-
     """
 
     def __init__(self, negate=False, flags=0):
@@ -231,11 +227,11 @@ def maybe_pad(draw, regex, strategy, left_pad_strategy, right_pad_strategy):
 
 def base_regex_strategy(regex, parsed=None):
     if parsed is None:
-        parsed = sre.parse(regex.pattern)
+        parsed = sre_parse.parse(regex.pattern, flags=regex.flags)
     return clear_cache_after_draw(_strategy(
         parsed,
         Context(flags=regex.flags),
-        regex.pattern
+        isinstance(regex.pattern, text_type)
     ))
 
 
@@ -245,7 +241,7 @@ def regex_strategy(regex):
 
     is_unicode = isinstance(regex.pattern, text_type)
 
-    parsed = sre.parse(regex.pattern)
+    parsed = sre_parse.parse(regex.pattern, flags=regex.flags)
 
     if not parsed:
         if is_unicode:
@@ -254,11 +250,11 @@ def regex_strategy(regex):
             return st.binary()
 
     if is_unicode:
-        base_padding_strategy = st.text(average_size=1)
+        base_padding_strategy = st.text()
         empty = st.just(u'')
         newline = st.just(u'\n')
     else:
-        base_padding_strategy = st.binary(average_size=1)
+        base_padding_strategy = st.binary()
         empty = st.just(b'')
         newline = st.just(b'\n')
 
@@ -293,7 +289,7 @@ def regex_strategy(regex):
     return maybe_pad(regex, base, left_pad, right_pad)
 
 
-def _strategy(codes, context, pattern):
+def _strategy(codes, context, is_unicode):
     """Convert SRE regex parse tree to strategy that generates strings matching
     that regex represented by that parse tree.
 
@@ -319,12 +315,11 @@ def _strategy(codes, context, pattern):
     1. List of groups (for backreferences)
     2. Active regex flags (e.g. IGNORECASE, DOTALL, UNICODE, they affect
        behavior of various inner strategies)
-
     """
     def recurse(codes):
-        return _strategy(codes, context, pattern)
+        return _strategy(codes, context, is_unicode)
 
-    if isinstance(pattern, text_type):
+    if is_unicode:
         empty = u''
         to_char = hunichr
     else:
@@ -386,7 +381,7 @@ def _strategy(codes, context, pattern):
             if context.flags & re.IGNORECASE and \
                     re.match(c, c.swapcase(), re.IGNORECASE) is not None:
                 blacklist |= set(c.swapcase())
-            if isinstance(pattern, text_type):
+            if is_unicode:
                 return st.characters(blacklist_characters=blacklist)
             else:
                 return binary_char.filter(lambda c: c not in blacklist)
@@ -394,7 +389,7 @@ def _strategy(codes, context, pattern):
         elif code == sre.IN:
             # Regex '[abc0-9]' (set of characters)
             negate = value[0][0] == sre.NEGATE
-            if isinstance(pattern, text_type):
+            if is_unicode:
                 builder = CharactersBuilder(negate, context.flags)
             else:
                 builder = BytesBuilder(negate, context.flags)
@@ -424,7 +419,7 @@ def _strategy(codes, context, pattern):
 
         elif code == sre.ANY:
             # Regex '.' (any char)
-            if isinstance(pattern, text_type):
+            if is_unicode:
                 if context.flags & re.DOTALL:
                     return st.characters()
                 return st.characters(blacklist_characters=u'\n')
@@ -446,7 +441,7 @@ def _strategy(codes, context, pattern):
                 # This feature is available only in specific Python versions
                 context.flags = (context.flags | value[1]) & ~value[2]
 
-            strat = _strategy(value[-1], context, pattern)
+            strat = _strategy(value[-1], context, is_unicode)
 
             context.flags = old_flags
 

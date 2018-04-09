@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -20,18 +20,48 @@ from __future__ import division, print_function, absolute_import
 import os
 import re
 import binascii
+import warnings
 import threading
+from hashlib import sha1
 from contextlib import contextmanager
 
+from hypothesis.errors import HypothesisWarning
 from hypothesis._settings import note_deprecation
-from hypothesis.internal.compat import FileNotFoundError, sha1, hbytes, \
+from hypothesis.configuration import storage_directory
+from hypothesis.internal.compat import FileNotFoundError, hbytes, \
     b64decode, b64encode
+from hypothesis.utils.conventions import not_set
 
 sqlite3 = None
 SQLITE_PATH = re.compile(r"\.\(db|sqlite|sqlite3\)$")
 
 
 def _db_for_path(path=None):
+    if path is not_set:
+        path = os.getenv('HYPOTHESIS_DATABASE_FILE')
+        if path is not None:  # pragma: no cover
+            # Note: we should retain an explicit deprecation warning for a
+            # further period after this is removed, to ease debugging for
+            # anyone migrating to a new version.
+            note_deprecation(
+                'The $HYPOTHESIS_DATABASE_FILE environment variable is '
+                'deprecated, and will be ignored by a future version of '
+                'Hypothesis.  Configure your database location via a '
+                'settings profile instead.'
+            )
+            return _db_for_path(path)
+        # Note: storage_directory attempts to create the dir in question, so
+        # if os.access fails there *must* be a fatal permissions issue.
+        path = storage_directory('examples')
+        if os.access(path, os.R_OK | os.W_OK | os.X_OK):
+            return _db_for_path(path)
+        else:  # pragma: no cover
+            warnings.warn(HypothesisWarning(
+                'The database setting is not configured, and the default '
+                'location is unusable - falling back to an in-memory '
+                'database for this session.  path=%r' % (path,)
+            ))
+            return InMemoryExampleDatabase()
     if path in (None, ':memory:'):
         return InMemoryExampleDatabase()
     path = str(path)
@@ -59,15 +89,13 @@ class ExampleDatabase(EDMeta('ExampleDatabase', (object,), {})):
     A key -> multiple distinct values mapping.
 
     Keys and values are binary data.
-
     """
 
     def save(self, key, value):
-        """save this value under this key.
+        """Save ``value`` under ``key``.
 
         If this value is already present for this key, silently do
         nothing
-
         """
         raise NotImplementedError('%s.save' % (type(self).__name__))
 
@@ -75,7 +103,6 @@ class ExampleDatabase(EDMeta('ExampleDatabase', (object,), {})):
         """Remove this value from this key.
 
         If this value is not present, silently do nothing.
-
         """
         raise NotImplementedError('%s.delete' % (type(self).__name__))
 
@@ -86,7 +113,6 @@ class ExampleDatabase(EDMeta('ExampleDatabase', (object,), {})):
 
         Note that value will be inserted at dest regardless of whether
         it is currently present at src.
-
         """
         if src == dest:
             self.save(src, value)
@@ -172,7 +198,7 @@ class SQLiteExampleDatabase(ExampleDatabase):
                 yield cursor
             finally:
                 cursor.close()
-        except:
+        except BaseException:
             conn.rollback()
             raise
         else:

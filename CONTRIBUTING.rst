@@ -29,8 +29,9 @@ fixes the error. Spot a tyop? Fix it up and send us a PR!
 You can read more about how we document Hypothesis in ``guides/documentation.rst``
 
 The process for submitting source code PRs is generally more involved
-(don't worry, we'll help you through it), so do read the rest of this document
-first.
+(don't worry, we'll help you through it), so do read the rest of this document.
+If you're planning a larger change, the contributor guides (in the ``guides/``
+directory) will make sure you're on the right track.
 
 -----------------------
 Copyright and Licensing
@@ -84,32 +85,26 @@ master fairly promptly. This will immediately trigger a release! Don't be scared
 breaks things, that's our fault not yours - the whole point of this process is to ensure
 that problems get caught before we merge rather than after.
 
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Pull request or external package?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-~~~~~~~~~~~~~~~~
-The Release File
-~~~~~~~~~~~~~~~~
+New strategies can be added to Hypothesis, or published as an external package
+on PyPI - either is fine for most strategies.  If in doubt, ask!
 
-All changes to Hypothesis get released automatically when they are merged to
-master.
+It's generally much easier to get things working outside, because there's
+more freedom to experiment and fewer requirements in stability and API style.
+We're happy to review and help with external packages as well as pull requests;
+several parts of Hypothesis started life outside and were integrated later
+(with permission, of course).  For clarity, we suggest naming your package
+in the pattern of ``hypothesis-regex`` and ``hypothesis-protobuf`` on PyPI.
 
-In order to update the version and change log entry, you have to create a
-release file. This is a normal restructured text file called RELEASE.rst that
-lives in the root of the repository and will be used as the change log entry.
-
-It should start with following lines:
-
-* RELEASE_TYPE: major
-* RELEASE_TYPE: minor
-* RELEASE_TYPE: patch
-
-This specifies the component of the version number that should be updated, with
-the meaning of each component following `semver <http://semver.org/>`_. As a
-rule of thumb if it's a bug fix it's probably a patch version update, if it's
-a new feature it's definitely a minor version update, and you probably
-shouldn't ever need to use a major version update unless you're part of the
-core team and we've discussed it a lot.
-
-This line will be removed from the final change log entry.
+On the other hand, being inside gets you access to some deeper implementation
+features (if you need them) and better long-term guarantees about maintenance.
+We particularly encourage pull requests for new composable primitives that
+make implementing other strategies easier, or for widely used types in the
+Python standard library.  Strategies for other things are also welcome;
+anything with external dependencies just goes in ``hypothesis.extra``.
 
 ~~~~~~~~~
 The build
@@ -143,16 +138,8 @@ build currently takes more than an hour of total time (it runs in parallel on Tr
 quite that long). If you've got a multi-core machine you can run 'make -j 2' (or any higher number if you want
 more) to run 2 jobs in parallel, but to be honest you're probably better off letting Travis run this step.
 
-You can also run a number of finer grained make tasks:
-
-* check-fast runs a fast but reasonably comprehensive subset of make check. It's still not *that* fast, but it
-  takes a couple of minutes instead of a couple of hours.
-* You can run the tests just for a single version of Python using one of check-py26, check-py27, check-py34,
-  check-py35, check-pypy.
-* check-coverage will run a subset of the tests on python 3.5 and then assert that this gave 100% coverage
-* lint will just run some source code checks.
-* check-django will just run tests for the Django integration
-* check-pytest will just run tests for the pytest plugin
+You can also run a number of finer grained make tasks - check ``.travis.yml`` for a short list and
+the Makefile for details.
 
 Note: The build requires a lot of different versions of python, so rather than have you install them yourself,
 the makefile will install them itself in a local directory. This means that the first time you run a task you
@@ -170,22 +157,30 @@ their individual contributions.
 * `Adam Sven Johnson <https://www.github.com/pkqk>`_
 * `Alex Stapleton <https://www.github.com/public>`_
 * `Alex Willmer <https://github.com/moreati>`_ (alex@moreati.org.uk)
-* `Ben Peterson <https://github.com/killthrush>`_ (killthrush@hotmail.com_)
+* `Ben Peterson <https://github.com/killthrush>`_ (killthrush@hotmail.com)
+* `Buck Evan, copyright Google LLC <https://github.com/bukzor>`_
 * `Charles O'Farrell <https://www.github.com/charleso>`_
+* `Charlie Tanksley <https://www.github.com/charlietanksley>`_
 * `Chris Down  <https://chrisdown.name>`_
 * `Christopher Martin <https://www.github.com/chris-martin>`_ (ch.martin@gmail.com)
 * `Cory Benfield <https://www.github.com/Lukasa>`_
 * `Cristi Cobzarenco <https://github.com/cristicbz>`_ (cristi@reinfer.io)
 * `David Bonner <https://github.com/rascalking>`_ (dbonner@gmail.com)
+* `David Chudzicki <https://github.com/dchudz>`_ (dchudz@gmail.com)
 * `Derek Gustafson <https://www.github.com/degustaf>`_
+* `Dion Misic <https://www.github.com/kingdion>`_ (dion.misic@gmail.com)
 * `Florian Bruhin <https://www.github.com/The-Compiler>`_
 * `follower <https://www.github.com/follower>`_
+* `Gregory Petrosyan <https://github.com/flyingmutant>`_
 * `Jeremy Thurgood <https://github.com/jerith>`_
+* `J.J. Green <http://soliton.vm.bytemark.co.uk/pub/jjg/>`_
 * `JP Viljoen <https://github.com/froztbyte>`_ (froztbyte@froztbyte.net)
 * `Jonty Wareing <https://www.github.com/Jonty>`_ (jonty@jonty.co.uk)
 * `jwg4 <https://www.github.com/jwg4>`_
 * `kbara <https://www.github.com/kbara>`_
+* `Kyle Reeve <https://www.github.com/kreeve>`_ (krzw92@gmail.com)
 * `Lee Begg <https://www.github.com/llnz2>`_
+* `Louis Taylor <https://github.com/kragniz>`_
 * `marekventur <https://www.github.com/marekventur>`_
 * `Marius Gedminas <https://www.github.com/mgedmin>`_ (marius@gedmin.as)
 * `Markus Unterwaditzer <http://github.com/untitaker/>`_ (markus@unterwaditzer.net)

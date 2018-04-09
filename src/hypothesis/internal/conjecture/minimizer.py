@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -61,7 +61,6 @@ class Minimizer(object):
         buffer.
 
         Return True if it succeeds as such.
-
         """
         assert isinstance(buffer, hbytes)
         assert len(buffer) == self.size
@@ -123,7 +122,7 @@ class Minimizer(object):
                 original_suffix,
                 hbytes([255]) * len(original_suffix),
             ]:
-                minimize_byte(
+                minimize_int(
                     self.current[i],
                     lambda c: self.current[i] == c or self.incorporate(
                         prefix + hbytes([c]) + suffix)
@@ -149,9 +148,7 @@ class Minimizer(object):
 
         So that's what this method does. It's a cheat to give us good shrinking
         of floating at low cost in runtime and only moderate cost in elegance.
-
         """
-
         # If the block is of the wrong size then we're certainly not using the
         # float encoding.
         if self.size != 8:
@@ -162,7 +159,7 @@ class Minimizer(object):
         if self.current[0] >> 7 == 0:
             return
 
-        i = int_from_bytes(self.current)
+        i = self.current_int
         f = lex_to_float(i)
 
         # This floating point number can be represented in our simple format.
@@ -197,23 +194,28 @@ class Minimizer(object):
         # ensures we can always move to integer boundaries and shrink past a
         # change that would require shifting the exponent while not changing
         # the float value much.
-        for g in [
-            floor(f), ceil(f),
-        ]:
+        for g in [floor(f), ceil(f)]:
             if self.incorporate_float(g):
                 return
 
         if f > 2:
             self.incorporate_float(f - 1)
 
+    @property
+    def current_int(self):
+        return int_from_bytes(self.current)
+
+    def minimize_as_integer(self):
+        minimize_int(
+            self.current_int,
+            lambda c: c == self.current_int or self.incorporate_int(c)
+        )
+
     def run(self):
         if not any(self.current):
             return
         if len(self.current) == 1:
-            minimize_byte(
-                self.current[0],
-                lambda c: c == self.current[0] or self.incorporate(hbytes([c]))
-            )
+            self.minimize_as_integer()
             return
 
         # Initial checks as to whether the two smallest possible buffers of
@@ -270,6 +272,7 @@ class Minimizer(object):
             self.shift()
             self.shrink_indices()
             self.rotate_suffixes()
+            self.minimize_as_integer()
 
 
 def minimize(initial, condition, random, full=True):
@@ -287,7 +290,6 @@ def binsearch(_lo, _hi):
 
     This function is used purely for its side effects and returns
     nothing.
-
     """
     def accept(f):
         lo = _lo
@@ -310,7 +312,9 @@ def binsearch(_lo, _hi):
     return accept
 
 
-def minimize_byte(c, f):
+def minimize_int(c, f):
+    """Return the smallest byte for which a function `f` returns True, starting
+    with the byte `c` as an unsigned integer."""
     if f(0):
         return 0
     if c == 1 or f(1):
@@ -318,14 +322,16 @@ def minimize_byte(c, f):
     elif c == 2:
         return 2
     if f(c - 1):
-        lo = 1
         hi = c - 1
-        while lo + 1 < hi:
-            mid = (lo + hi) // 2
-            if f(mid):
-                hi = mid
-            else:
-                lo = mid
-        return hi
+    elif f(c - 2):
+        hi = c - 2
     else:
         return c
+    lo = 1
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if f(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi

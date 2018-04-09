@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -26,7 +26,7 @@ from hypothesis import Verbosity, note, seed, given, assume, reject, \
     settings
 from hypothesis.errors import Unsatisfiable
 from tests.common.utils import fails, raises, fails_with, capture_out
-from hypothesis.strategies import just, sets, text, lists, binary, \
+from hypothesis.strategies import data, just, sets, text, lists, binary, \
     builds, floats, one_of, booleans, integers, frozensets, sampled_from
 
 
@@ -203,7 +203,7 @@ def test_contains_the_test_function_name_in_the_exception_string():
     ) in e.value.args[0]
 
 
-@given(lists(integers()), integers())
+@given(lists(integers(), unique=True), integers())
 def test_removing_an_element_from_a_unique_list(xs, y):
     assume(len(set(xs)) == len(xs))
 
@@ -216,9 +216,9 @@ def test_removing_an_element_from_a_unique_list(xs, y):
 
 
 @fails
-@given(lists(integers(), average_size=25.0), integers())
-def test_removing_an_element_from_a_non_unique_list(xs, y):
-    assume(y in xs)
+@given(lists(integers(), min_size=2), data())
+def test_removing_an_element_from_a_non_unique_list(xs, data):
+    y = data.draw(sampled_from(xs))
     xs.remove(y)
     assert y not in xs
 
@@ -346,6 +346,7 @@ def test_uses_provided_seed():
 
     @given(integers())
     @seed(42)
+    @settings(database=None)
     def test_foo(x):
         pass
 
@@ -385,17 +386,18 @@ def test_can_run_with_database_in_thread():
 
     @given(integers())
     def test_blah(x):
-        assert False
+        raise ValueError()
 
     def run_test():
         try:
             test_blah()
-        except AssertionError:
+        except ValueError:
             results.append('success')
 
     # Run once in the main thread and once in another thread. Execution is
     # strictly serial, so no need for locking.
     run_test()
+    assert results == ['success']
     thread = threading.Thread(target=run_test)
     thread.start()
     thread.join()
@@ -521,6 +523,6 @@ def test_prints_notes_once_on_failure():
     assert lines.count('Hi there') == 1
 
 
-@given(lists(max_size=0))
+@given(lists(integers(), max_size=0))
 def test_empty_lists(xs):
     assert xs == []

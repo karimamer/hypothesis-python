@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,7 +19,6 @@
 
 Either an explicit settings object can be used or the default object on
 this module can be modified.
-
 """
 
 from __future__ import division, print_function, absolute_import
@@ -33,8 +32,11 @@ from enum import Enum, IntEnum, unique
 import attr
 
 from hypothesis.errors import InvalidArgument, HypothesisDeprecationWarning
-from hypothesis.configuration import hypothesis_home_dir
+from hypothesis.internal.compat import text_type
 from hypothesis.utils.conventions import UniqueIdentifier, not_set
+from hypothesis.internal.reflection import proxies, \
+    get_pretty_function_description
+from hypothesis.internal.validation import try_convert
 from hypothesis.utils.dynamicvariables import DynamicVariable
 
 __all__ = [
@@ -46,9 +48,6 @@ unlimited = UniqueIdentifier('unlimited')
 
 
 all_settings = {}
-
-
-_db_cache = {}
 
 
 class settingsProperty(object):
@@ -74,12 +73,12 @@ class settingsProperty(object):
 
     @property
     def __doc__(self):
+        description = all_settings[self.name].description
+        deprecation_message = all_settings[self.name].deprecation_message
         default = repr(getattr(settings.default, self.name)) if \
             self.show_default else '(dynamically calculated)'
-        return '\n'.join((
-            all_settings[self.name].description,
-            'default value: %s' % (default,)
-        ))
+        return '\n\n'.join([description, 'default value: %s' % (default,),
+                            (deprecation_message or '').strip()]).strip()
 
 
 default_variable = DynamicVariable(None)
@@ -109,18 +108,16 @@ class settingsMeta(type):
 
 
 class settings(settingsMeta('settings', (object,), {})):
-
     """A settings object controls a variety of parameters that are used in
     falsification. These may control both the falsification strategy and the
     details of the data that is generated.
 
     Default values are picked up from the settings.default object and
     changes made there will be picked up in newly created settings.
-
     """
 
     _WHITELISTED_REAL_PROPERTIES = [
-        '_database', '_construction_complete', 'storage'
+        '_construction_complete', 'storage'
     ]
     __definitions_are_locked = False
     _profiles = {}
@@ -134,14 +131,17 @@ class settings(settingsMeta('settings', (object,), {})):
         else:
             raise AttributeError('settings has no attribute %s' % (name,))
 
-    def __init__(
-            self,
-            parent=None,
-            **kwargs
-    ):
+    def __init__(self, parent=None, **kwargs):
+        if (
+            kwargs.get('database', not_set) is not_set and
+            kwargs.get('database_file', not_set) is not not_set
+        ):
+            if kwargs['database_file'] is None:
+                kwargs['database'] = None
+            else:
+                from hypothesis.database import ExampleDatabase
+                kwargs['database'] = ExampleDatabase(kwargs['database_file'])
         self._construction_complete = False
-        self._database = kwargs.pop('database', not_set)
-        database_file = kwargs.get('database_file', not_set)
         deprecations = []
         defaults = parent or settings.default
         if defaults is not None:
@@ -150,19 +150,15 @@ class settings(settingsMeta('settings', (object,), {})):
                     kwargs[setting.name] = getattr(defaults, setting.name)
                 else:
                     if kwargs[setting.name] != setting.future_default:
-                        if (
-                            setting.deprecation_message is not None
-                        ):
+                        if setting.deprecation_message is not None:
                             deprecations.append(setting)
                     if setting.validator:
                         kwargs[setting.name] = setting.validator(
                             kwargs[setting.name])
-            if self._database is not_set and database_file is not_set:
-                self._database = defaults.database
         for name, value in kwargs.items():
             if name not in all_settings:
                 raise InvalidArgument(
-                    'Invalid argument %s' % (name,))
+                    'Invalid argument: %r is not a valid setting' % (name,))
             setattr(self, name, value)
         self.storage = threading.local()
         self._construction_complete = True
@@ -178,12 +174,67 @@ class settings(settingsMeta('settings', (object,), {})):
             return self.storage.defaults_stack
 
     def __call__(self, test):
+        """Make the settings object (self) an attribute of the test.
+
+        The settings are later discovered by looking them up on the test
+        itself.
+
+        Also, we want to issue a deprecation warning for settings used alone
+        (without @given) so, note the deprecation in the new test, but also
+        attach the version without the warning as an attribute, so that @given
+        can unwrap it (since if @given is used, that means we don't want the
+        deprecation warning).
+
+        When it's time to turn the warning into an error, we'll raise an
+        exception instead of calling note_deprecation (and can delete
+        "test(*args, **kwargs)").
+        """
+        if not callable(test):
+            raise InvalidArgument(
+                'settings objects can be called as a decorator with @given, '
+                'but test=%r' % (test,)
+            )
+        if hasattr(test, '_hypothesis_internal_settings_applied'):
+            note_deprecation(
+                '%s has already been decorated with a settings object, which '
+                'will be overridden.  This will be an error in a future '
+                'version of Hypothesis.\n    Previous:  %r\n    This:  %r' % (
+                    get_pretty_function_description(test),
+                    test._hypothesis_internal_use_settings,
+                    self
+                )
+            )
+
         test._hypothesis_internal_use_settings = self
-        return test
+
+        # For double-@settings check:
+        test._hypothesis_internal_settings_applied = True
+
+        @proxies(test)
+        def new_test(*args, **kwargs):
+            note_deprecation(
+                'Using `@settings` without `@given` does not make sense and '
+                'will be an error in a future version of Hypothesis.'
+            )
+            test(*args, **kwargs)
+
+        # @given will get the test from this attribution (rather than use the
+        # version with the deprecation warning)
+        new_test._hypothesis_internal_test_function_without_warning = test
+
+        # This means @given has been applied, so we don't need to worry about
+        # warning for @settings alone.
+        has_given_applied = getattr(test, 'is_hypothesis_test', False)
+        test_to_use = test if has_given_applied else new_test
+        test_to_use._hypothesis_internal_use_settings = self
+        # Can't use _hypothesis_internal_use_settings as an indicator that
+        # @settings was applied, because @given also assigns that attribute.
+        test._hypothesis_internal_settings_applied = True
+        return test_to_use
 
     @classmethod
     def define_setting(
-        cls, name, description, default, options=None, deprecation=None,
+        cls, name, description, default, options=None,
         validator=None, show_default=True, future_default=not_set,
         deprecation_message=None,
     ):
@@ -195,7 +246,6 @@ class settings(settingsMeta('settings', (object,), {})):
         - default is the default value. This may be a zero argument
           function in which case it is evaluated and its result is stored
           the first time it is accessed on any given settings object.
-
         """
         if settings.__definitions_are_locked:
             from hypothesis.errors import InvalidState
@@ -222,12 +272,6 @@ class settings(settingsMeta('settings', (object,), {})):
     def __setattr__(self, name, value):
         if name in settings._WHITELISTED_REAL_PROPERTIES:
             return object.__setattr__(self, name, value)
-        elif name == 'database':
-            assert self._construction_complete
-            raise AttributeError(
-                'settings objects are immutable and may not be assigned to'
-                ' after construction.'
-            )
         elif name in all_settings:
             if self._construction_complete:
                 raise AttributeError(
@@ -257,28 +301,6 @@ class settings(settingsMeta('settings', (object,), {})):
         bits.sort()
         return 'settings(%s)' % ', '.join(bits)
 
-    @property
-    def database(self):
-        """An ExampleDatabase instance to use for storage of examples. May be
-        None.
-
-        If this was explicitly set at settings instantiation then that
-        value will be used (even if it was None). If not and the
-        database_file setting is not None this will be lazily loaded as
-        an ExampleDatabase, using that file the first time that this
-        property is accessed on a particular thread.
-
-        """
-        if self._database is not_set and self.database_file is not None:
-            from hypothesis.database import ExampleDatabase
-            if self.database_file not in _db_cache:
-                _db_cache[self.database_file] = (
-                    ExampleDatabase(self.database_file))
-            return _db_cache[self.database_file]
-        if self._database is not_set:
-            self._database = None
-        return self._database
-
     def __enter__(self):
         default_context_manager = default_variable.with_value(self)
         self.defaults_stack().append(default_context_manager)
@@ -290,44 +312,53 @@ class settings(settingsMeta('settings', (object,), {})):
         return default_context_manager.__exit__(*args, **kwargs)
 
     @staticmethod
-    def register_profile(name, settings):
-        """registers a collection of values to be used as a settings profile.
-        These settings can be loaded in by name. Enable different defaults for
-        different settings.
+    def register_profile(name, parent=None, **kwargs):
+        """Registers a collection of values to be used as a settings profile.
 
-        - settings is a settings object
+        Settings profiles can be loaded by name - for example, you might
+        create a 'fast' profile which runs fewer examples, keep the 'default'
+        profile, and create a 'ci' profile that increases the number of
+        examples and uses a different database to store failures.
 
+        The arguments to this method are exactly as for
+        :class:`~hypothesis.settings`: optional ``parent`` settings, and
+        keyword arguments for each setting that will be set differently to
+        parent (or settings.default, if parent is None).
         """
-        settings._profiles[name] = settings
+        if not isinstance(name, (str, text_type)):
+            note_deprecation('name=%r must be a string' % (name,))
+        if 'settings' in kwargs:
+            if parent is None:
+                parent = kwargs.pop('settings')
+                note_deprecation('The `settings` argument is deprecated - '
+                                 'use `parent` instead.')
+            else:
+                raise InvalidArgument(
+                    'The `settings` argument is deprecated, and has been '
+                    'replaced by the `parent` argument.  Use `parent` only.'
+                )
+        settings._profiles[name] = settings(parent=parent, **kwargs)
 
     @staticmethod
     def get_profile(name):
-        """Return the profile with the given name.
-
-        - name is a string representing the name of the profile
-         to load
-        A InvalidArgument exception will be thrown if the
-         profile does not exist
-
-        """
+        """Return the profile with the given name."""
+        if not isinstance(name, (str, text_type)):
+            note_deprecation('name=%r must be a string' % (name,))
         try:
             return settings._profiles[name]
         except KeyError:
-            raise InvalidArgument(
-                "Profile '{0}' has not been registered".format(
-                    name
-                )
-            )
+            raise InvalidArgument('Profile %r is not registered' % (name,))
 
     @staticmethod
     def load_profile(name):
-        """Loads in the settings defined in the profile provided If the profile
-        does not exist an InvalidArgument will be thrown.
+        """Loads in the settings defined in the profile provided.
 
+        If the profile does not exist, InvalidArgument will be raised.
         Any setting not defined in the profile will be the library
-        defined default for that setting
-
+        defined default for that setting.
         """
+        if not isinstance(name, (str, text_type)):
+            note_deprecation('name=%r must be a string' % (name,))
         settings._current_profile = name
         settings._assign_default_internal(settings.get_profile(name))
 
@@ -348,8 +379,12 @@ settings.define_setting(
     default=5,
     description="""
 Raise Unsatisfiable for any tests which do not produce at least this many
-values that pass all assume() calls and which have not exhaustively covered the
-search space.
+values that pass all :func:`hypothesis.assume` calls and which have not
+exhaustively covered the search space.
+
+Note that examples are compared at the level of the underlying byte-stream -
+for example, :func:`~hypothesis.strategies.booleans` contains 256 unique
+examples at this level because it always uses one byte.
 """
 )
 
@@ -369,17 +404,6 @@ settings.define_setting(
 Once this many iterations of the example loop have run, including ones which
 failed to satisfy assumptions and ones which produced duplicates, falsification
 will terminate.
-"""
-)
-
-settings.define_setting(
-    'max_mutations',
-    default=10,
-    description="""
-Hypothesis will try this many variations on a single example before moving on
-to an entirely fresh start. If you've got hard to satisfy properties, raising
-this might help, but you probably shouldn't touch this dial unless you really
-know what you're doing.
 """
 )
 
@@ -421,15 +445,12 @@ if it has not found many examples. This is a soft rather than a hard
 limit - Hypothesis won't e.g. interrupt execution of the called
 function to stop it. If this value is <= 0 then no timeout will be
 applied.
-
-Note: This setting is deprecated. In future Hypothesis will be removing the
-timeout feature.
 """,
     deprecation_message="""
-The timeout feature will go away in a future version of Hypothesis. To get
-the future behaviour set timeout=hypothesis.unlimited instead (which will
-remain valid for a further deprecation period after this setting has gone
-away).
+The timeout setting is deprecated and will be removed in a future version of
+Hypothesis. To get the future behaviour set ``timeout=hypothesis.unlimited``
+instead (which will remain valid for a further deprecation period after this
+setting has gone away).
 """,
     future_default=unlimited,
     validator=_validate_timeout
@@ -443,8 +464,8 @@ If this is True then hypothesis will run in deterministic mode
 where each falsification uses a random number generator that is seeded
 based on the hypothesis to falsify, which will be consistent across
 multiple runs. This has the advantage that it will eliminate any
-randomness from your tests, which may be preferable for some situations
-. It does have the disadvantage of making your tests less likely to
+randomness from your tests, which may be preferable for some situations.
+It does have the disadvantage of making your tests less likely to
 find novel breakages.
 """
 )
@@ -456,32 +477,63 @@ settings.define_setting(
 If set to True, anything that would cause Hypothesis to issue a warning will
 instead raise an error. Note that new warnings may be added at any time, so
 running with strict set to True means that new Hypothesis releases may validly
-break your code.
+break your code.  Note also that, as strict mode is itself deprecated,
+enabling it is now an error!
 
 You can enable this setting temporarily by setting the HYPOTHESIS_STRICT_MODE
 environment variable to the string 'true'.
 """,
     deprecation_message="""
 Strict mode is deprecated and will go away in a future version of Hypothesis.
-
 To get the same behaviour, use
 warnings.simplefilter('error', HypothesisDeprecationWarning).
 """,
     future_default=False,
 )
 
+
+def _validate_database(db, __from_db_file=False):
+    from hypothesis.database import ExampleDatabase
+    if db is None or isinstance(db, ExampleDatabase):
+        return db
+    if __from_db_file or db is not_set:
+        return ExampleDatabase(db)
+    raise InvalidArgument(
+        'Arguments to the database setting must be None or an instance of '
+        'ExampleDatabase.  Try passing database=ExampleDatabase(%r), or '
+        'construct and use one of the specific subclasses in '
+        'hypothesis.database' % (db,)
+    )
+
+
 settings.define_setting(
-    'database_file',
-    default=lambda: (
-        os.getenv('HYPOTHESIS_DATABASE_FILE') or
-        os.path.join(hypothesis_home_dir(), 'examples')
-    ),
+    'database',
+    default=lambda: _validate_database(not_set),
     show_default=False,
     description="""
-    An instance of hypothesis.database.ExampleDatabase that will be
+An instance of hypothesis.database.ExampleDatabase that will be
 used to save examples to and load previous examples from. May be None
-in which case no storage will be used.
-"""
+in which case no storage will be used, `:memory:` for an in-memory
+database, or any path for a directory-based example database.
+""",
+    validator=_validate_database,
+)
+
+settings.define_setting(
+    'database_file',
+    default=not_set,
+    show_default=False,
+    description="""
+The file or directory location to save and load previously tried examples;
+`:memory:` for an in-memory cache or None to disable caching entirely.
+""",
+    validator=lambda f: _validate_database(f, __from_db_file=True),
+    deprecation_message="""
+The `database_file` setting is deprecated in favor of the `database`
+setting, and will be removed in a future version.  It only exists at
+all for complicated historical reasons and you should just use
+`database` instead.
+""",
 )
 
 
@@ -495,13 +547,45 @@ class Phase(IntEnum):
 
 @unique
 class HealthCheck(Enum):
+    """Arguments for :attr:`~hypothesis.settings.suppress_health_check`.
+
+    Each member of this enum is a type of health check to suppress.
+    """
+
     exception_in_generation = 0
+    """Deprecated and no longer does anything. It used to convert errors in
+    data generation into FailedHealthCheck error."""
+
     data_too_large = 1
+    """Check for when the typical size of the examples you are generating
+    exceeds the maximum allowed size too often."""
+
     filter_too_much = 2
+    """Check for when the test is filtering out too many examples, either
+    through use of :func:`~hypothesis.assume()` or :ref:`filter() <filtering>`,
+    or occasionally for Hypothesis internal reasons."""
+
     too_slow = 3
+    """Check for when your data generation is extremely slow and likely to hurt
+    testing."""
+
     random_module = 4
+    """Deprecated and no longer does anything. It used to check for whether
+    your tests used the global random module. Now @given tests automatically
+    seed random so this is no longer an error."""
+
     return_value = 5
+    """Checks if your tests return a non-None value (which will be ignored and
+    is unlikely to do what you want)."""
+
     hung_test = 6
+    """Checks if your tests have been running for a very long time."""
+
+    large_base_example = 7
+    """Checks if the natural example to shrink towards is very large."""
+
+    not_a_test_method = 8
+    """Checks if @given has been applied to a method of unittest.TestCase."""
 
 
 @unique
@@ -612,19 +696,33 @@ attempting to actually execute your test.
 """
 )
 
-settings.define_setting(
-    'suppress_health_check',
-    default=[],
-    description="""A list of health checks to disable."""
-)
+
+def validate_health_check_suppressions(suppressions):
+    suppressions = try_convert(list, suppressions, 'suppress_health_check')
+    for s in suppressions:
+        if not isinstance(s, HealthCheck):
+            note_deprecation((
+                'Non-HealthCheck value %r of type %s in suppress_health_check '
+                'will be ignored, and will become an error in a future '
+                'version of Hypothesis') % (
+                s, type(s).__name__,
+            ))
+        elif s in (
+            HealthCheck.exception_in_generation, HealthCheck.random_module
+        ):
+            note_deprecation((
+                '%s is now ignored and suppressing it is a no-op. This will '
+                'become an error in a future version of Hypothesis. Simply '
+                'remove it from your list of suppressions to get the same '
+                'effect.') % (s,))
+    return suppressions
+
 
 settings.define_setting(
-    'report_statistics',
-    default=Statistics.interesting,
-    description=u"""
-If set to True, Hypothesis will run a preliminary health check before
-attempting to actually execute your test.
-"""
+    'suppress_health_check',
+    default=(),
+    description="""A list of health checks to disable.""",
+    validator=validate_health_check_suppressions
 )
 
 settings.define_setting(
@@ -660,11 +758,41 @@ so.
 """
 )
 
-settings.lock_further_definitions()
 
-settings.register_profile('default', settings())
-settings.load_profile('default')
-assert settings.default is not None
+class PrintSettings(Enum):
+    """Flags to determine whether or not to print a detailed example blob to
+    use with :func:`~hypothesis.reproduce_failure` for failing test cases."""
+
+    NEVER = 0
+    """Never print a blob."""
+
+    INFER = 1
+    """Make an educated guess as to whether it would be appropriate to print
+    the blob.
+
+    The current rules are that this will print if both:
+
+    1. The output from Hypothesis appears to be unsuitable for use with
+       :func:`~hypothesis.example`.
+    2. The output is not too long."""
+
+    ALWAYS = 2
+    """Always print a blob on failure."""
+
+
+settings.define_setting(
+    'print_blob',
+    default=PrintSettings.INFER,
+    description="""
+Determines whether to print blobs after tests that can be used to reproduce
+failures.
+
+See :ref:`the documentation on @reproduce_failure <reproduce_failure>` for
+more details of this behaviour.
+"""
+)
+
+settings.lock_further_definitions()
 
 
 def note_deprecation(message, s=None):
@@ -675,3 +803,8 @@ def note_deprecation(message, s=None):
     warning = HypothesisDeprecationWarning(message)
     if verbosity > Verbosity.quiet:
         warnings.warn(warning, stacklevel=3)
+
+
+settings.register_profile('default', settings())
+settings.load_profile('default')
+assert settings.default is not None

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -57,7 +57,8 @@ IN_COVERAGE_TESTS = os.getenv('HYPOTHESIS_INTERNAL_COVERAGE') == 'true'
 
 
 if IN_COVERAGE_TESTS:
-    log = open('branch-check', 'w')
+    with open('branch-check', 'w'):
+        pass
     written = set()
 
     def record_branch(name, value):
@@ -65,11 +66,8 @@ if IN_COVERAGE_TESTS:
         if key in written:
             return
         written.add(key)
-        log.write(
-            json.dumps({'name': name, 'value': value})
-        )
-        log.write('\n')
-        log.flush()
+        with open('branch-check', 'a') as log:
+            log.write(json.dumps({'name': name, 'value': value}) + '\n')
 
     description_stack = []
 
@@ -89,7 +87,7 @@ if IN_COVERAGE_TESTS:
             description = ' in '.join(reversed(description_stack)) + ' passed'
             yield
             record_branch(description, True)
-        except:
+        except BaseException:
             record_branch(description, False)
             raise
         finally:

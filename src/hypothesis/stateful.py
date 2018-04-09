@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -21,7 +21,6 @@ a single value.
 
 Notably, the set of steps available at any point may depend on the
 execution to date.
-
 """
 
 
@@ -38,18 +37,19 @@ from hypothesis.core import find
 from hypothesis.errors import Flaky, NoSuchExample, InvalidDefinition, \
     HypothesisException
 from hypothesis.control import BuildContext
-from hypothesis._settings import settings as Settings
 from hypothesis._settings import Verbosity
+from hypothesis._settings import settings as Settings
 from hypothesis.reporting import report, verbose_report, current_verbosity
-from hypothesis.strategies import just, lists, builds, one_of, runner, \
-    integers
+from hypothesis.strategies import just, one_of, runner, tuples, \
+    fixed_dictionaries
 from hypothesis.vendor.pretty import CUnicodeIO, RepresentationPrinter
 from hypothesis.internal.reflection import proxies, nicerepr
 from hypothesis.internal.conjecture.data import StopTest
-from hypothesis.internal.conjecture.utils import integer_range
+from hypothesis.internal.conjecture.utils import integer_range, \
+    calc_label_from_name
 from hypothesis.searchstrategy.strategies import SearchStrategy
-from hypothesis.searchstrategy.collections import TupleStrategy, \
-    FixedKeysDictStrategy
+
+STATE_MACHINE_RUN_LABEL = calc_label_from_name('another state machine step')
 
 
 class TestCaseProperty(object):  # pragma: no cover
@@ -99,7 +99,6 @@ def run_state_machine_as_test(state_machine_factory, settings=None):
     state_machine_factory is anything which returns an instance of
     GenericStateMachine when called with no arguments - it can be a class or a
     function. settings will be used to control the execution of the test.
-
     """
     try:
         breaker = find_breaking_runner(state_machine_factory, settings)
@@ -116,7 +115,6 @@ def run_state_machine_as_test(state_machine_factory, settings=None):
 
 
 class GenericStateMachine(object):
-
     """A GenericStateMachine is the basic entry point into Hypothesis's
     approach to stateful testing.
 
@@ -136,7 +134,6 @@ class GenericStateMachine(object):
 
     And if this ever produces an error it will shrink it down to a small
     sequence of example choices demonstrating that.
-
     """
 
     def steps(self):
@@ -148,11 +145,22 @@ class GenericStateMachine(object):
         """Execute a step that has been previously drawn from self.steps()"""
         raise NotImplementedError(u'%r.execute_step()' % (self,))
 
+    def print_start(self):
+        """Called right at the start of printing.
+
+        By default does nothing.
+        """
+
+    def print_end(self):
+        """Called right at the end of printing.
+
+        By default does nothing.
+        """
+
     def print_step(self, step):
         """Print a step to the current reporter.
 
         This is called right before a step is executed.
-
         """
         self.step_count = getattr(self, u'step_count', 0) + 1
         report(u'Step #%d: %s' % (self.step_count, nicerepr(step)))
@@ -162,7 +170,6 @@ class GenericStateMachine(object):
         state.
 
         Does nothing by default
-
         """
         pass
 
@@ -211,11 +218,9 @@ GenericStateMachine.find_breaking_runner = classmethod(find_breaking_runner)
 
 
 class StateMachineRunner(object):
-
     """A StateMachineRunner is a description of how to run a state machine.
 
     It contains values that it will use to shape the examples.
-
     """
 
     def __init__(self, data, n_steps):
@@ -228,27 +233,25 @@ class StateMachineRunner(object):
             print_steps = current_verbosity() >= Verbosity.debug
         self.data.hypothesis_runner = state_machine
 
-        stopping_value = 1 - 1.0 / (1 + self.n_steps * 0.5)
+        should_continue = cu.many(
+            self.data, min_size=1, max_size=self.n_steps,
+            average_size=self.n_steps,
+        )
+
         try:
+            if print_steps:
+                state_machine.print_start()
             state_machine.check_invariants()
 
-            steps = 0
-            while True:
-                if steps >= self.n_steps:
-                    stopping_value = 0
-                self.data.start_example()
-                if not cu.biased_coin(self.data, stopping_value):
-                    self.data.stop_example()
-                    break
-                assert steps < self.n_steps
+            while should_continue.more():
                 value = self.data.draw(state_machine.steps())
-                steps += 1
                 if print_steps:
                     state_machine.print_step(value)
                 state_machine.execute_step(value)
-                self.data.stop_example()
                 state_machine.check_invariants()
         finally:
+            if print_steps:
+                state_machine.print_end()
             state_machine.teardown()
 
 
@@ -272,8 +275,7 @@ class Rule(object):
 self_strategy = runner()
 
 
-class Bundle(SearchStrategy):
-
+class BundleReferenceStrategy(SearchStrategy):
     def __init__(self, name):
         self.name = name
 
@@ -282,8 +284,18 @@ class Bundle(SearchStrategy):
         bundle = machine.bundle(self.name)
         if not bundle:
             data.mark_invalid()
-        reference = bundle.pop()
-        bundle.insert(integer_range(data, 0, len(bundle)), reference)
+        return bundle[integer_range(data, 0, len(bundle) - 1)]
+
+
+class Bundle(SearchStrategy):
+
+    def __init__(self, name):
+        self.name = name
+        self.__reference_strategy = BundleReferenceStrategy(name)
+
+    def do_draw(self, data):
+        machine = data.draw(self_strategy)
+        reference = data.draw(self.__reference_strategy)
         return machine.names_to_values[reference.name]
 
 
@@ -303,7 +315,6 @@ def rule(targets=(), target=None, **kwargs):
     invocation. If their value is a Bundle then values that have previously
     been produced for that bundle will be provided, if they are anything else
     it will be turned into a strategy and values from that will be provided.
-
     """
     if target is not None:
         targets += (target,)
@@ -358,7 +369,6 @@ def precondition(precond):
 
     This is better than using assume in your rule since more valid rules
     should be able to be run.
-
     """
     def decorator(f):
         @proxies(f)
@@ -402,7 +412,6 @@ def invariant():
             @invariant()
             def is_nonzero(self):
                 assert self.state != 0
-
     """
     def accept(f):
         existing_invariant = getattr(f, INVARIANT_MARKER, None)
@@ -423,14 +432,7 @@ def invariant():
     return accept
 
 
-@attr.s()
-class ShuffleBundle(object):
-    bundle = attr.ib()
-    swaps = attr.ib()
-
-
 class RuleBasedStateMachine(GenericStateMachine):
-
     """A RuleBasedStateMachine gives you a more structured way to define state
     machines.
 
@@ -439,8 +441,8 @@ class RuleBasedStateMachine(GenericStateMachine):
     from bundles (or just from normal strategies) and push data onto
     bundles. At any given point a random applicable rule will be
     executed.
-
     """
+
     _rules_per_class = {}
     _invariants_per_class = {}
     _base_rules_per_class = {}
@@ -457,6 +459,8 @@ class RuleBasedStateMachine(GenericStateMachine):
         self.__printer = RepresentationPrinter(self.__stream)
 
     def __pretty(self, value):
+        if isinstance(value, VarReference):
+            return value.name
         self.__stream.seek(0)
         self.__stream.truncate(0)
         self.__printer.output_width = 0
@@ -543,55 +547,49 @@ class RuleBasedStateMachine(GenericStateMachine):
                     if not bundle:
                         valid = False
                         break
+                    v = BundleReferenceStrategy(v.name)
                 converted_arguments[k] = v
             if valid:
-                strategies.append(TupleStrategy((
-                    just(rule),
-                    FixedKeysDictStrategy(converted_arguments)
-                ), tuple))
+                strategies.append(tuples(
+                    just(rule), fixed_dictionaries(converted_arguments)
+                ))
         if not strategies:
             raise InvalidDefinition(
                 u'No progress can be made from state %r' % (self,)
             )
 
-        for name, bundle in self.bundles.items():
-            if len(bundle) > 1:
-                strategies.append(
-                    builds(
-                        ShuffleBundle, just(name),
-                        lists(integers(0, len(bundle) - 1))))
-
         return one_of(strategies)
 
+    def print_start(self):
+        report(u'state = %s()' % (self.__class__.__name__,))
+
+    def print_end(self):
+        report(u'state.teardown()')
+
     def print_step(self, step):
-        if isinstance(step, ShuffleBundle):
-            return
         rule, data = step
         data_repr = {}
         for k, v in data.items():
             data_repr[k] = self.__pretty(v)
         self.step_count = getattr(self, u'step_count', 0) + 1
-        report(u'Step #%d: %s%s(%s)' % (
-            self.step_count,
+        report(u'%sstate.%s(%s)' % (
             u'%s = ' % (self.upcoming_name(),) if rule.targets else u'',
             rule.function.__name__,
             u', '.join(u'%s=%s' % kv for kv in data_repr.items())
         ))
 
     def execute_step(self, step):
-        if isinstance(step, ShuffleBundle):
-            bundle = self.bundle(step.bundle)
-            for i in step.swaps:
-                bundle.insert(i, bundle.pop())
-            return
         rule, data = step
         data = dict(data)
+        for k, v in list(data.items()):
+            if isinstance(v, VarReference):
+                data[k] = self.names_to_values[v.name]
         result = rule.function(self, **data)
         if rule.targets:
             name = self.new_name()
             self.names_to_values[name] = result
             self.__printer.singleton_pprinters.setdefault(
-                id(result), lambda obj, p, cycle: p.text(name),
+                id(result), lambda obj, p, cycle: p.text(name)
             )
             for target in rule.targets:
                 self.bundle(target).append(VarReference(name))

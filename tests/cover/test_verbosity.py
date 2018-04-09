@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -60,7 +60,7 @@ def test_does_not_log_in_quiet_mode():
 
 def test_includes_progress_in_verbose_mode():
     with capture_verbosity(Verbosity.verbose) as o:
-        with settings(verbosity=Verbosity.verbose):
+        with settings(verbosity=Verbosity.verbose, database=None):
             find(lists(integers()), lambda x: sum(x) >= 1000000)
 
     out = o.getvalue()
@@ -82,7 +82,7 @@ def test_prints_initial_attempts_on_find():
                 return x not in seen
             find(integers(), not_first)
 
-    assert u'Trying example' in o.getvalue()
+    assert u'Tried non-satisfying example' in o.getvalue()
 
 
 def test_includes_intermediate_results_in_verbose_mode():

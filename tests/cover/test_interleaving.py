@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -17,15 +17,17 @@
 
 from __future__ import division, print_function, absolute_import
 
-from hypothesis import strategies as st
 from hypothesis import find, note, given, settings
+from hypothesis import strategies as st
 from tests.common.utils import checks_deprecated_behaviour
 
 
 @checks_deprecated_behaviour
 def test_can_eval_stream_inside_find():
     @given(st.streaming(st.integers(min_value=0)), st.random_module())
-    @settings(buffer_size=200, max_shrinks=5, max_examples=10)
+    @settings(
+        buffer_size=200, max_shrinks=5, max_examples=10,
+        perform_health_check=False)
     def test(stream, rnd):
         x = find(
             st.lists(st.integers(min_value=0), min_size=10),

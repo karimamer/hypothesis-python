@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -24,8 +24,7 @@ import pytest
 
 from hypothesis import given
 from tests.common.debug import minimal
-from hypothesis.strategies import lists, floats, randoms, integers, \
-    complex_numbers
+from hypothesis.strategies import lists, floats, integers
 
 
 def test_minimize_negative_int():
@@ -108,11 +107,6 @@ def test_minimal_non_boundary_float():
     assert 2 < x < 3
 
 
-def test_can_minimal_standard_complex_numbers():
-    minimal(complex_numbers(), lambda x: x.imag != 0) == 0j
-    minimal(complex_numbers(), lambda x: x.real != 0) == 1
-
-
 def test_minimal_float_is_zero():
     assert minimal(floats(), lambda x: True) == 0.0
 
@@ -159,20 +153,14 @@ def test_can_minimal_float_far_from_integral():
 
 def test_list_of_fractional_float():
     assert set(minimal(
-        lists(floats(), average_size=20),
+        lists(floats(), min_size=5),
         lambda x: len([t for t in x if t >= 1.5]) >= 5,
         timeout_after=60,
-    )) in (
-        set((1.5,)),
-        set((1.5, 2.0)),
-        set((2.0,)),
-    )
+    )).issubset([1.5, 2.0])
 
 
-@given(randoms())
-def test_minimal_fractional_float(rnd):
-    assert minimal(
-        floats(), lambda x: x >= 1.5, random=rnd) in (1.5, 2.0)
+def test_minimal_fractional_float():
+    assert minimal(floats(), lambda x: x >= 1.5) in (1.5, 2.0)
 
 
 def test_minimizes_lists_of_negative_ints_up_to_boundary():

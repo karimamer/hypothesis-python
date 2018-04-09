@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -17,13 +17,13 @@
 
 from __future__ import division, print_function, absolute_import
 
-import sys
 import inspect
+import warnings
 
 import pytest
 
-from hypothesis import strategies as st
 from hypothesis import given
+from hypothesis import strategies as st
 from hypothesis.internal.compat import FullArgSpec, ceil, floor, hrange, \
     qualname, int_to_bytes, integer_types, getfullargspec, \
     int_from_bytes
@@ -74,7 +74,9 @@ def d(a1, a2=1, a3=2, a4=None):
 
 @pytest.mark.parametrize('f', [a, b, c, d])
 def test_agrees_on_argspec(f):
-    basic = inspect.getargspec(f)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', DeprecationWarning)
+        basic = inspect.getargspec(f)
     full = getfullargspec(f)
     assert basic.args == full.args
     assert basic.varargs == full.varargs
@@ -106,13 +108,13 @@ def test_to_bytes_in_big_endian_order(x, y):
     assert int_to_bytes(x, 8) <= int_to_bytes(y, 8)
 
 
-@pytest.mark.skipif(sys.version_info[0] != 3 or sys.version_info[:2] == (3, 5),
-                    reason='getfullargspec was deprecated, so we wrap it')
+@pytest.mark.skipif(not hasattr(inspect, 'getfullargspec'),
+                    reason='inspect.getfullargspec only exists under Python 3')
 def test_inspection_compat():
     assert getfullargspec is inspect.getfullargspec
 
 
-@pytest.mark.skipif(sys.version_info[0] != 3,
+@pytest.mark.skipif(not hasattr(inspect, 'FullArgSpec'),
                     reason='inspect.FullArgSpec only exists under Python 3')
 def test_inspection_result_compat():
     assert FullArgSpec is inspect.FullArgSpec
@@ -125,7 +127,6 @@ def test_ceil(x):
     Under Python 2, math.ceil returns a float, which cannot represent large
     integers - for example, `float(2**53) == float(2**53 + 1)` - and this
     is obviously incorrect for unlimited-precision integer operations.
-
     """
     assert isinstance(ceil(x), integer_types)
     assert x <= ceil(x) < x + 1

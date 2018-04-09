@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -20,7 +20,8 @@ from __future__ import division, print_function, absolute_import
 import pytest
 
 import hypothesis.strategies as st
-from hypothesis import Verbosity, find, given, assume, settings
+from hypothesis import Verbosity, core, find, given, assume, settings, \
+    unlimited
 from hypothesis.errors import NoSuchExample, Unsatisfiable
 from tests.common.utils import all_values, non_covering_examples
 from hypothesis.database import InMemoryExampleDatabase
@@ -32,7 +33,7 @@ def has_a_non_zero_byte(x):
 
 
 def test_saves_incremental_steps_in_database():
-    key = b"a database key"
+    key = b'a database key'
     database = InMemoryExampleDatabase()
     find(
         st.binary(min_size=10), lambda x: has_a_non_zero_byte(x),
@@ -42,7 +43,7 @@ def test_saves_incremental_steps_in_database():
 
 
 def test_clears_out_database_as_things_get_boring():
-    key = b"a database key"
+    key = b'a database key'
     database = InMemoryExampleDatabase()
     do_we_care = True
 
@@ -57,15 +58,15 @@ def test_clears_out_database_as_things_get_boring():
         except NoSuchExample:
             pass
     stuff()
-    assert len(all_values(database)) > 1
+    assert len(non_covering_examples(database)) > 1
     do_we_care = False
     stuff()
-    initial = len(all_values(database))
+    initial = len(non_covering_examples(database))
     assert initial > 0
 
     for _ in range(initial):
         stuff()
-        keys = len(all_values(database))
+        keys = len(non_covering_examples(database))
         if not keys:
             break
     else:
@@ -73,7 +74,7 @@ def test_clears_out_database_as_things_get_boring():
 
 
 def test_trashes_invalid_examples():
-    key = b"a database key"
+    key = b'a database key'
     database = InMemoryExampleDatabase()
     finicky = False
 
@@ -96,7 +97,7 @@ def test_trashes_invalid_examples():
 
 
 def test_respects_max_examples_in_database_usage():
-    key = b"a database key"
+    key = b'a database key'
     database = InMemoryExampleDatabase()
     do_we_care = True
     counter = [0]
@@ -123,48 +124,66 @@ def test_respects_max_examples_in_database_usage():
 
 
 def test_clears_out_everything_smaller_than_the_interesting_example():
-    in_clearing = False
-    target = [None]
+    target = None
 
-    for _ in range(5):
-        # We retry the test run a few times to get a large enough initial
-        # set of examples that we're not going to explore them all in the
-        # initial run.
-        cache = {}
-        seen = set()
+    # We retry the test run a few times to get a large enough initial
+    # set of examples that we're not going to explore them all in the
+    # initial run.
+    last_sum = [None]
 
-        database = InMemoryExampleDatabase()
+    database = InMemoryExampleDatabase()
 
-        @settings(
-            database=database, verbosity=Verbosity.quiet, max_examples=100)
-        @given(st.binary(min_size=10, max_size=10))
-        def test(i):
-            if not in_clearing:
-                if len([b for b in i if b > 1]) >= 8:
-                    assert cache.setdefault(i, len(cache) % 10 != 9)
-            elif len(seen) <= 20:
-                seen.add(i)
-            else:
-                if target[0] is None:
-                    remainder = sorted([s for s in saved if s not in seen])
-                    target[0] = remainder[len(remainder) // 2]
-                assert i in seen or i < target[0]
+    seen = set()
 
-        with pytest.raises(AssertionError):
-            test()
+    @settings(
+        database=database, verbosity=Verbosity.quiet, max_examples=100,
+        timeout=unlimited, max_shrinks=100
+    )
+    @given(st.binary(min_size=10, max_size=10))
+    def test(b):
+        if target is not None:
+            if len(seen) < 30:
+                seen.add(b)
+            if b in seen:
+                return
+            if b >= target:
+                raise ValueError()
+            return
+        b = hbytes(b)
+        s = sum(b)
+        if (
+            (last_sum[0] is None and s > 1000) or
+            (last_sum[0] is not None and s >= last_sum[0] - 1)
+        ):
+            last_sum[0] = s
+            raise ValueError()
 
-        saved = non_covering_examples(database)
-        if len(saved) > 30:
-            break
-    else:
-        assert False, 'Never generated enough examples while shrinking'
-
-    in_clearing = True
-
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         test()
 
     saved = non_covering_examples(database)
+    assert len(saved) > 30
+
+    target = sorted(saved)[len(saved) // 2]
+
+    with pytest.raises(ValueError):
+        test()
+
+    saved = non_covering_examples(database)
+    assert target in saved or target in seen
 
     for s in saved:
-        assert s >= target[0]
+        assert s >= target
+
+
+def test_does_not_use_database_when_seed_is_forced(monkeypatch):
+    monkeypatch.setattr(core, 'global_force_seed', 42)
+    database = InMemoryExampleDatabase()
+    database.fetch = None
+
+    @settings(database=database)
+    @given(st.integers())
+    def test(i):
+        pass
+
+    test()

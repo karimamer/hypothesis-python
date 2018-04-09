@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -20,6 +20,7 @@ from __future__ import division, print_function, absolute_import
 import math
 import decimal
 import fractions
+import collections
 from datetime import date, time, datetime, timedelta
 
 import pytest
@@ -27,7 +28,7 @@ import pytest
 import hypothesis.strategies as ds
 from hypothesis import find, given, settings
 from hypothesis.errors import InvalidArgument
-from hypothesis.internal.compat import float_to_decimal
+from tests.common.utils import checks_deprecated_behaviour
 from hypothesis.internal.reflection import nicerepr
 
 
@@ -104,26 +105,29 @@ def fn_ktest(*fnkwargs):
     (ds.fractions, {'max_denominator': 0}),
     (ds.fractions, {'max_denominator': 1.5}),
     (ds.fractions, {'min_value': complex(1, 2)}),
-    (ds.lists, {}),
-    (ds.lists, {'average_size': '5'}),
-    (ds.lists, {'average_size': float('nan')}),
     (ds.lists, {'min_size': 10, 'max_size': 9}),
     (ds.lists, {'min_size': -10, 'max_size': -9}),
     (ds.lists, {'max_size': -9}),
-    (ds.lists, {'max_size': 10}),
     (ds.lists, {'min_size': -10}),
-    (ds.lists, {'max_size': 10, 'average_size': 20}),
-    (ds.lists, {'min_size': 1.0, 'average_size': 0.5}),
+    (ds.lists, {'min_size': float('nan')}),
     (ds.lists, {'elements': 'hi'}),
     (ds.text, {'min_size': 10, 'max_size': 9}),
-    (ds.text, {'max_size': 10, 'average_size': 20}),
     (ds.binary, {'min_size': 10, 'max_size': 9}),
-    (ds.binary, {'max_size': 10, 'average_size': 20}),
     (ds.floats, {'min_value': float('nan')}),
+    (ds.floats, {'min_value': '0'}),
+    (ds.floats, {'max_value': '0'}),
     (ds.floats, {'max_value': 0.0, 'min_value': 1.0}),
     (ds.floats, {'min_value': 0.0, 'allow_nan': True}),
     (ds.floats, {'max_value': 0.0, 'allow_nan': True}),
     (ds.floats, {'min_value': 0.0, 'max_value': 1.0, 'allow_infinity': True}),
+    (ds.complex_numbers, {'min_magnitude': float('nan')}),
+    (ds.complex_numbers, {'max_magnitude': float('nan')}),
+    (ds.complex_numbers, {'max_magnitude': complex(1, 2)}),
+    (ds.complex_numbers, {'min_magnitude': -1}),
+    (ds.complex_numbers, {'max_magnitude': -1}),
+    (ds.complex_numbers, {'min_magnitude': 3, 'max_magnitude': 2}),
+    (ds.complex_numbers, {'max_magnitude': 2, 'allow_infinity': True}),
+    (ds.complex_numbers, {'max_magnitude': 2, 'allow_nan': True}),
     (ds.fixed_dictionaries, {'mapping': 'fish'}),
     (ds.fixed_dictionaries, {'mapping': {1: 'fish'}}),
     (ds.dictionaries, {'keys': ds.integers(), 'values': 1}),
@@ -139,6 +143,14 @@ def fn_ktest(*fnkwargs):
     (ds.times, {
         'min_value': time(2, 0),
         'max_value': time(1, 0)}),
+    (ds.uuids, {'version': 6}),
+    (ds.characters, {'min_codepoint': -1}),
+    (ds.characters, {'min_codepoint': '1'}),
+    (ds.characters, {'max_codepoint': -1}),
+    (ds.characters, {'max_codepoint': '1'}),
+    (ds.characters, {'whitelist_categories': []}),
+    (ds.characters, {'whitelist_categories': ['Nd'],
+                     'blacklist_categories': ['Nd']}),
 )
 def test_validates_keyword_arguments(fn, kwargs):
     with pytest.raises(InvalidArgument):
@@ -171,13 +183,11 @@ def test_validates_keyword_arguments(fn, kwargs):
     (ds.fractions, {'min_value': fractions.Fraction(1, 2)}),
     (ds.fractions, {'min_value': '1/2', 'max_denominator': 1}),
     (ds.fractions, {'max_value': '1/2', 'max_denominator': 1}),
-    (ds.lists, {'max_size': 0}),
+    (ds.lists, {'elements': ds.nothing(), 'max_size': 0}),
     (ds.lists, {'elements': ds.integers()}),
     (ds.lists, {'elements': ds.integers(), 'max_size': 5}),
     (ds.lists, {'elements': ds.booleans(), 'min_size': 5}),
     (ds.lists, {'elements': ds.booleans(), 'min_size': 5, 'max_size': 10}),
-    (ds.lists, {
-        'average_size': 20, 'elements': ds.booleans(), 'max_size': 25}),
     (ds.sets, {
         'min_size': 10, 'max_size': 10, 'elements': ds.integers(),
     }),
@@ -193,6 +203,17 @@ def test_validates_keyword_arguments(fn, kwargs):
     (ds.floats, {'min_value': 1.0, 'allow_nan': False}),
     (ds.floats, {'max_value': 1.0, 'allow_nan': False}),
     (ds.floats, {'max_value': 1.0, 'min_value': -1.0, 'allow_nan': False}),
+    (ds.complex_numbers, {}),
+    (ds.complex_numbers, {'min_magnitude': 3, 'max_magnitude': 3}),
+    (ds.complex_numbers, {'max_magnitude': 0}),
+    (ds.complex_numbers, {'allow_nan': True}),
+    (ds.complex_numbers, {'allow_nan': True, 'allow_infinity': True}),
+    (ds.complex_numbers, {'allow_nan': True, 'allow_infinity': False}),
+    (ds.complex_numbers, {'allow_nan': False}),
+    (ds.complex_numbers, {'allow_nan': False, 'allow_infinity': True}),
+    (ds.complex_numbers, {'allow_nan': False, 'allow_infinity': False}),
+    (ds.complex_numbers, {
+        'max_magnitude': float('inf'), 'allow_infinity': True}),
     (ds.sampled_from, {'elements': [1]}),
     (ds.sampled_from, {'elements': [1, 2, 3]}),
     (ds.fixed_dictionaries, {'mapping': {1: ds.integers()}}),
@@ -200,6 +221,8 @@ def test_validates_keyword_arguments(fn, kwargs):
     (ds.text, {'alphabet': 'abc'}),
     (ds.text, {'alphabet': ''}),
     (ds.text, {'alphabet': ds.sampled_from('abc')}),
+    (ds.characters, {'whitelist_categories': ['N']}),
+    (ds.characters, {'blacklist_categories': []}),
 )
 def test_produces_valid_examples_from_keyword(fn, kwargs):
     fn(**kwargs).example()
@@ -223,6 +246,35 @@ def test_validates_args(fn, args):
 )
 def test_produces_valid_examples_from_args(fn, args):
     fn(*args).example()
+
+
+def test_build_class_with_target_kwarg():
+    NamedTupleWithTargetField = collections.namedtuple('Something', ['target'])
+    ds.builds(NamedTupleWithTargetField, target=ds.integers()).example()
+
+
+@checks_deprecated_behaviour
+def test_builds_can_specify_target_with_target_kwarg():
+    ds.builds(x=ds.integers(), target=lambda x: x).example()
+
+
+def test_builds_raises_with_no_target():
+    with pytest.raises(InvalidArgument):
+        ds.builds().example()
+
+
+@pytest.mark.parametrize('non_callable', [1, 'abc', ds.integers()])
+def test_builds_raises_if_non_callable_as_target_kwarg(non_callable):
+    with pytest.raises(InvalidArgument):
+        ds.builds(target=non_callable).example()
+
+
+@pytest.mark.parametrize('non_callable', [1, 'abc', ds.integers()])
+def test_builds_raises_if_non_callable_as_first_arg(non_callable):
+    # If there are any positional arguments, then the target (which must be
+    # callable) must be specified as the first one.
+    with pytest.raises(InvalidArgument):
+        ds.builds(non_callable, target=lambda x: x).example()
 
 
 def test_tuples_raise_error_on_bad_kwargs():
@@ -302,7 +354,7 @@ def test_decimals():
 def test_non_float_decimal():
     find(
         ds.decimals(),
-        lambda d: d.is_finite() and float_to_decimal(float(d)) != d)
+        lambda d: d.is_finite() and decimal.Decimal(float(d)) != d)
 
 
 def test_produces_dictionaries_of_at_least_minimum_size():
@@ -348,3 +400,24 @@ def test_iterables_are_exhaustible(it):
 
 def test_minimal_iterable():
     assert list(find(ds.iterables(ds.integers()), lambda x: True)) == []
+
+
+@checks_deprecated_behaviour
+def test_iterables_without_elements_is_deprecated():
+    assert list(ds.iterables().example()) == []
+
+
+@checks_deprecated_behaviour
+def test_lists_with_max_size_no_elements_is_deprecated_and_error():
+    with pytest.raises(InvalidArgument):
+        ds.lists(max_size=1).example()
+
+
+@checks_deprecated_behaviour
+def test_empty_elements_with_max_size_is_deprecated():
+    ds.lists(ds.nothing(), max_size=1).example()
+
+
+@checks_deprecated_behaviour
+def test_average_size_is_deprecated():
+    ds.lists(ds.integers(), average_size=1).example()

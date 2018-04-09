@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -21,9 +21,8 @@ import enum
 import math
 import datetime as dt
 import operator
-from decimal import Context, Decimal
+from decimal import Context, Decimal, localcontext
 from inspect import isclass, isfunction
-from numbers import Rational
 from fractions import Fraction
 from functools import reduce
 
@@ -33,14 +32,18 @@ from hypothesis._settings import note_deprecation
 from hypothesis.internal.cache import LRUReusedCache
 from hypothesis.searchstrategy import SearchStrategy
 from hypothesis.internal.compat import gcd, ceil, floor, hrange, \
-    text_type, integer_types, get_type_hints, getfullargspec, \
-    implements_iterator
-from hypothesis.internal.floats import is_negative, float_to_int, \
-    int_to_float, count_between_floats
-from hypothesis.internal.coverage import check_function
+    text_type, get_type_hints, getfullargspec, implements_iterator
+from hypothesis.internal.floats import next_up, next_down, is_negative, \
+    float_to_int, int_to_float, count_between_floats
+from hypothesis.internal.charmap import as_general_categories
+from hypothesis.internal.cathetus import cathetus
 from hypothesis.internal.renaming import renamed_arguments
 from hypothesis.utils.conventions import infer, not_set
 from hypothesis.internal.reflection import proxies, required_args
+from hypothesis.internal.validation import check_type, try_convert, \
+    check_strategy, check_valid_size, check_valid_bound, \
+    check_valid_sizes, check_valid_integer, check_valid_interval, \
+    check_valid_magnitude
 
 __all__ = [
     'nothing',
@@ -117,7 +120,15 @@ def cacheable(fn):
 
 
 def base_defines_strategy(force_reusable):
+    """Returns a decorator for strategy functions.
+
+    If force_reusable is True, the generated values are assumed to be
+    reusable, i.e. immutable and safe to cache, across multiple test
+    invocations.
+    """
     def decorator(strategy_definition):
+        """A decorator that registers the function as a strategy and makes it
+        lazily evaluated."""
         from hypothesis.searchstrategy.lazy import LazyStrategy
         _strategies.add(strategy_definition.__name__)
 
@@ -167,24 +178,36 @@ NOTHING = Nothing()
 @cacheable
 def nothing():
     """This strategy never successfully draws a value and will always reject on
-    an attempt to draw."""
+    an attempt to draw.
+
+    Examples from this strategy do not shrink (because there are none).
+    """
     return NOTHING
 
 
 def just(value):
-    """Return a strategy which only generates value.
+    """Return a strategy which only generates ``value``.
 
-    Note: value is not copied. Be wary of using mutable values.
+    Note: ``value`` is not copied. Be wary of using mutable values.
 
+    If ``value`` is the result of a callable, you can use
+    :func:`builds(callable) <hypothesis.strategies.builds>` instead
+    of ``just(callable())`` to get a fresh value each time.
+
+    Examples from this strategy do not shrink (because there is only one).
     """
     from hypothesis.searchstrategy.misc import JustStrategy
 
     return JustStrategy(value)
 
 
-@defines_strategy
+@defines_strategy_with_reusable_values
 def none():
-    """Return a strategy which only generates None."""
+    """Return a strategy which only generates None.
+
+    Examples from this strategy do not shrink (because there is only
+    one).
+    """
     return just(None)
 
 
@@ -193,9 +216,19 @@ def one_of(*args):
     strategies.
 
     This may be called with one iterable argument instead of multiple
-    strategy arguments. In which case one_of(x) and one_of(\*x) are
+    strategy arguments. In which case ``one_of(x)`` and ``one_of(*x)`` are
     equivalent.
 
+    Examples from this strategy will generally shrink to ones that come from
+    strategies earlier in the list, then shrink according to behaviour of the
+    strategy that produced them. In order to get good shrinking behaviour,
+    try to put simpler strategies first. e.g. ``one_of(none(), text())`` is
+    better than ``one_of(text(), none())``.
+
+    This is especially important when using recursive strategies. e.g.
+    ``x = st.deferred(lambda: st.none() | st.tuples(x, x))`` will shrink well,
+    but ``x = st.deferred(lambda: st.tuples(x, x) | st.none())`` will shrink
+    very badly indeed.
     """
     if len(args) == 1 and not isinstance(args[0], SearchStrategy):
         try:
@@ -215,6 +248,8 @@ def integers(min_value=None, max_value=None):
     If min_value is not None then all values will be >= min_value. If
     max_value is not None then all values will be <= max_value
 
+    Examples from this strategy will shrink towards zero, and negative values
+    will also shrink towards positive (i.e. -n may be replaced by +n).
     """
 
     check_valid_bound(min_value, 'min_value')
@@ -260,7 +295,11 @@ def integers(min_value=None, max_value=None):
 @cacheable
 @defines_strategy
 def booleans():
-    """Returns a strategy which generates instances of bool."""
+    """Returns a strategy which generates instances of bool.
+
+    Examples from this strategy will shrink towards False (i.e.
+    shrinking will try to replace True with False where possible).
+    """
     from hypothesis.searchstrategy.misc import BoolStrategy
     return BoolStrategy()
 
@@ -282,6 +321,10 @@ def floats(
     Where not explicitly ruled out by the bounds, all of infinity, -infinity
     and NaN are possible values generated by this strategy.
 
+    Examples from this strategy have a complicated and hard to explain
+    shrinking behaviour, but it tries to improve "human readability". Finite
+    numbers will be preferred to infinity and infinity will be preferred to
+    NaN.
     """
 
     if allow_nan is None:
@@ -293,16 +336,31 @@ def floats(
                     allow_nan
                 ))
 
-    min_value = try_convert(float, min_value, 'min_value')
-    max_value = try_convert(float, max_value, 'max_value')
-
     check_valid_bound(min_value, 'min_value')
     check_valid_bound(max_value, 'max_value')
+
+    min_arg, max_arg = min_value, max_value
+    if min_value is not None:
+        min_value = float(min_value)
+    if max_value is not None:
+        max_value = float(max_value)
+
     check_valid_interval(min_value, max_value, 'min_value', 'max_value')
     if min_value == float(u'-inf'):
         min_value = None
     if max_value == float(u'inf'):
         max_value = None
+
+    if min_value is not None and min_value < min_arg:
+        min_value = next_up(min_value)
+        assert min_value > min_arg
+    if max_value is not None and max_value > max_arg:
+        max_value = next_down(max_value)
+        assert max_value < max_arg
+    if None not in (min_value, max_value) and min_value > max_value:
+        raise InvalidArgument(
+            'There are no floating-point values between min_value=%r and '
+            'max_value=%r' % (min_arg, max_arg))
 
     if allow_infinity is None:
         allow_infinity = bool(min_value is None or max_value is None)
@@ -375,16 +433,6 @@ def floats(
 
 
 @cacheable
-@defines_strategy_with_reusable_values
-def complex_numbers():
-    """Returns a strategy that generates complex numbers."""
-    from hypothesis.searchstrategy.numbers import ComplexStrategy
-    return ComplexStrategy(
-        tuples(floats(), floats())
-    )
-
-
-@cacheable
 @defines_strategy
 def tuples(*args):
     """Return a strategy which generates a tuple of the same length as args by
@@ -393,12 +441,13 @@ def tuples(*args):
     e.g. tuples(integers(), integers()) would generate a tuple of length
     two with both values an integer.
 
+    Examples from this strategy shrink by shrinking their component parts.
     """
     for arg in args:
         check_strategy(arg)
 
     from hypothesis.searchstrategy.collections import TupleStrategy
-    return TupleStrategy(args, tuple)
+    return TupleStrategy(args)
 
 
 @defines_strategy
@@ -412,6 +461,10 @@ def sampled_from(elements):
     :class:`~python:enum.Enum` objects.  :class:`~python:enum.Flag` objects
     may also generate any combination of their members.
 
+    Examples from this strategy shrink by replacing them with values earlier in
+    the list. So e.g. sampled_from((10, 1)) will shrink by trying to replace
+    1 values with 10, and sampled_from((1, 10)) will shrink by trying to
+    replace 10 values with 1.
     """
     from hypothesis.searchstrategy.misc import SampledFromStrategy
     from hypothesis.internal.conjecture.utils import check_sample
@@ -440,9 +493,8 @@ def lists(
     None). If max_size is 0 then elements may be None and only the empty list
     will be drawn.
 
-    average_size may be used as a size hint to roughly control the size
-    of the list but it may not be the actual average of sizes you get, due
-    to a variety of factors.
+    The average_size argument is deprecated.  Internal upgrades since
+    Hypothesis 1.x mean we no longer needed this hint to generate useful data.
 
     If unique is True (or something that evaluates to True), we compare direct
     object equality, as if unique_by was `lambda x: x`. This comparison only
@@ -452,15 +504,27 @@ def lists(
     when given a value drawn from elements. The resulting list will satisfy the
     condition that for i != j, unique_by(result[i]) != unique_by(result[j]).
 
+    Examples from this strategy shrink by trying to remove elements from the
+    list, and by shrinking each individual element of the list.
     """
     check_valid_sizes(min_size, average_size, max_size)
-    if elements is None or (max_size is not None and max_size <= 0):
-        if max_size is None or max_size > 0:
+    if elements is None:
+        note_deprecation(
+            'Passing a strategy for `elements` of the list will be required '
+            'in a future version of Hypothesis.  To create lists that are '
+            'always empty, use `builds(list)` or `lists(nothing())`.'
+        )
+        if min_size or average_size or max_size:
+            # Checked internally for lists with an elements strategy, but
+            # we're about to skip that and return builds(list) instead...
             raise InvalidArgument(
-                u'Cannot create non-empty lists without an element type'
+                'Cannot create a non-empty collection (min_size=%r, '
+                'average_size=%r, max_size=%r) without elements.'
+                % (min_size, average_size, max_size)
             )
-        else:
-            return builds(list)
+        return builds(list)
+    if max_size == 0:
+        return builds(list)
     check_strategy(elements)
     if unique:
         if unique_by is not None:
@@ -472,43 +536,22 @@ def lists(
             def unique_by(x):
                 return x
 
+    if min_size is None:
+        min_size = 0
+
+    if max_size is None:
+        max_size = float('inf')
+
+    from hypothesis.searchstrategy.collections import ListStrategy, \
+        UniqueListStrategy
     if unique_by is not None:
-        from hypothesis.searchstrategy.collections import UniqueListStrategy
-        min_size = min_size or 0
-        max_size = max_size or float(u'inf')
-        if average_size is None:
-            if max_size < float(u'inf'):
-                if max_size <= 5:
-                    average_size = min_size + 0.75 * (max_size - min_size)
-                else:
-                    average_size = (max_size + min_size) / 2
-            else:
-                average_size = max(
-                    _AVERAGE_LIST_LENGTH,
-                    min_size * 2
-                )
-        result = UniqueListStrategy(
+        return UniqueListStrategy(
             elements=elements,
-            average_size=average_size,
             max_size=max_size,
             min_size=min_size,
             key=unique_by
         )
-    else:
-        from hypothesis.searchstrategy.collections import ListStrategy
-        if min_size is None:
-            min_size = 0
-        if average_size is None:
-            if max_size is None:
-                average_size = _AVERAGE_LIST_LENGTH
-            else:
-                average_size = (min_size + max_size) * 0.5
-
-        result = ListStrategy(
-            (elements,), average_length=average_size,
-            min_size=min_size, max_size=max_size,
-        )
-    return result
+    return ListStrategy(elements, min_size=min_size, max_size=max_size)
 
 
 @cacheable
@@ -520,7 +563,15 @@ def sets(elements=None, min_size=None, average_size=None, max_size=None):
     are hashable until running the test, so you can define a strategy
     for sets of an unhashable type but it will fail at test time.
 
+    Examples from this strategy shrink by trying to remove elements from the
+    set, and by shrinking each individual element of the set.
     """
+    if elements is None:
+        note_deprecation(
+            'Passing a strategy for `elements` of the set will be required '
+            'in a future version of Hypothesis.  To create sets that are '
+            'always empty, use `builds(set)` or `sets(nothing())`.'
+        )
     return lists(
         elements=elements, min_size=min_size, average_size=average_size,
         max_size=max_size, unique=True
@@ -532,6 +583,13 @@ def sets(elements=None, min_size=None, average_size=None, max_size=None):
 def frozensets(elements=None, min_size=None, average_size=None, max_size=None):
     """This is identical to the sets function but instead returns
     frozensets."""
+    if elements is None:
+        note_deprecation(
+            'Passing a strategy for `elements` of the frozenset will be '
+            'required in a future version of Hypothesis.  To create '
+            'frozensets that are always empty, use `builds(frozenset)` '
+            'or `frozensets(nothing())`.'
+        )
     return lists(
         elements=elements, min_size=min_size, average_size=average_size,
         max_size=max_size, unique=True
@@ -547,8 +605,14 @@ def iterables(elements=None, min_size=None, average_size=None, max_size=None,
     fixed length (e.g. generators). This strategy produces iterators,
     which cannot be indexed and do not have a fixed length. This ensures
     that you do not accidentally depend on sequence behaviour.
-
     """
+    if elements is None:
+        note_deprecation(
+            'Passing a strategy for `elements` of the iterable will be '
+            'required in a future version of Hypothesis.  To create '
+            'iterables that are always empty, use `iterables(nothing())`.'
+        )
+
     @implements_iterator
     class PrettyIter(object):
         def __init__(self, values):
@@ -580,6 +644,8 @@ def fixed_dictionaries(mapping):
     instance of OrderedDict the keys will also be in the same order,
     otherwise the order is arbitrary.
 
+    Examples from this strategy shrink by shrinking each individual value in
+    the generated dictionary.
     """
     from hypothesis.searchstrategy.collections import FixedKeysDictStrategy
     check_type(dict, mapping, 'mapping')
@@ -599,6 +665,8 @@ def dictionaries(
 
     The size parameters have the same interpretation as for lists.
 
+    Examples from this strategy shrink by trying to remove keys from the
+    generated dictionary, and by shrinking each generated key and value.
     """
     check_valid_sizes(min_size, average_size, max_size)
     if max_size == 0:
@@ -608,7 +676,7 @@ def dictionaries(
 
     return lists(
         tuples(keys, values),
-        min_size=min_size, average_size=average_size, max_size=max_size,
+        min_size=min_size, max_size=max_size,
         unique_by=lambda x: x[0]
     ).map(dict_class)
 
@@ -621,9 +689,10 @@ def streaming(elements):
     The result is iterable (the iterator will never terminate) and
     indexable.
 
+    Examples from this strategy shrink by trying to shrink each value drawn.
+
     .. deprecated:: 3.15.0
         Use :func:`data() <hypothesis.strategies.data>` instead.
-
     """
     note_deprecation(
         'streaming() has been deprecated. Use the data() strategy instead and '
@@ -644,37 +713,43 @@ def characters(whitelist_categories=None, blacklist_categories=None,
     """Generates unicode text type (unicode on python 2, str on python 3)
     characters following specified filtering rules.
 
-    When no filtering rules are specifed, any character can be produced.
+    - When no filtering rules are specifed, any character can be produced.
+    - If ``min_codepoint`` or ``max_codepoint`` is specifed, then only
+      characters having a codepoint in that range will be produced.
+    - If ``whitelist_categories`` is specified, then only characters from those
+      Unicode categories will be produced. This is a further restriction,
+      characters must also satisfy ``min_codepoint`` and ``max_codepoint``.
+    - If ``blacklist_categories`` is specified, then any character from those
+      categories will not be produced.  Any overlap between
+      ``whitelist_categories`` and ``blacklist_categories`` will raise an
+      exception, as each character can only belong to a single class.
+    - If ``whitelist_characters`` is specified, then any additional characters
+      in that list will also be produced.
+    - If ``blacklist_characters`` is specified, then any characters in
+      that list will be not be produced. Any overlap between \
+      ``whitelist_characters`` and ``blacklist_characters`` will raise an
+      exception.
 
-    If ``min_codepoint`` or ``max_codepoint`` is specifed, then only
-    characters having a codepoint in that range will be produced.
+    The ``_codepoint`` arguments must be integers between zero and
+    :obj:`python:sys.max_unicode`.  The ``_characters`` arguments must be
+    collections of length-one unicode strings, such as a unicode string.
 
-    If ``whitelist_categories`` is specified, then only characters from those
-    Unicode categories will be produced. This is a further restriction,
-    characters must also satisfy ``min_codepoint`` and ``max_codepoint``.
+    The ``_categories`` arguments must be used to specify either the
+    one-letter Unicode major category or the two-letter Unicode
+    `general category`_.  For example, ``('Nd', 'Lu')`` signifies "Number,
+    decimal digit" and "Letter, uppercase".  A single letter ('major category')
+    can be given to match all corresponding categories, for example ``'P'``
+    for characters in any punctuation category.
 
-    If ``blacklist_categories`` is specified, then any character from those
-    categories will not be produced. This is a further restriction,
-    characters that match both ``whitelist_categories`` and
-    ``blacklist_categories`` will not be produced.
+    .. _general category: https://wikipedia.org/wiki/Unicode_character_property
 
-    If ``whitelist_characters`` is specified, then any additional characters
-    in that list will also be produced.
-
-    If ``blacklist_characters`` is specified, then any characters in that list
-    will be not be produced. Any overlap between ``whitelist_characters`` and
-    ``blacklist_characters`` will raise an exception.
-
+    Examples from this strategy shrink towards the codepoint for ``'0'``,
+    or the first allowable codepoint after it if ``'0'`` is excluded.
     """
-    if (
-        min_codepoint is not None and max_codepoint is not None and
-        min_codepoint > max_codepoint
-    ):
-        raise InvalidArgument(
-            'Cannot have min_codepoint=%d > max_codepoint=%d ' % (
-                min_codepoint, max_codepoint
-            )
-        )
+    check_valid_size(min_codepoint, 'min_codepoint')
+    check_valid_size(max_codepoint, 'max_codepoint')
+    check_valid_interval(min_codepoint, max_codepoint,
+                         'min_codepoint', 'max_codepoint')
     if all((whitelist_characters is not None,
             min_codepoint is None,
             max_codepoint is None,
@@ -682,25 +757,33 @@ def characters(whitelist_categories=None, blacklist_categories=None,
             blacklist_categories is None,
             )):
         raise InvalidArgument(
-            'Cannot have just whitelist_characters=%r alone, '
-            'it would have no effect. Perhaps you want sampled_from()' % (
-                whitelist_characters,
-            )
-        )
-    if (
-        whitelist_characters is not None and
-        blacklist_characters is not None and
-        set(blacklist_characters).intersection(set(whitelist_characters))
-    ):
+            'Passing only whitelist_characters=%r would have no effect. '
+            'Perhaps you want sampled_from() ?' % (whitelist_characters,))
+    blacklist_characters = blacklist_characters or ''
+    whitelist_characters = whitelist_characters or ''
+    overlap = set(blacklist_characters).intersection(whitelist_characters)
+    if overlap:
         raise InvalidArgument(
             'Characters %r are present in both whitelist_characters=%r, and '
             'blacklist_characters=%r' % (
-                set(blacklist_characters).intersection(
-                    set(whitelist_characters)
-                ),
-                whitelist_characters, blacklist_characters,
-            )
-        )
+                sorted(overlap), whitelist_characters, blacklist_characters))
+    blacklist_categories = as_general_categories(
+        blacklist_categories, 'blacklist_categories')
+    if whitelist_categories is not None and not whitelist_categories and \
+            not whitelist_characters:
+        raise InvalidArgument(
+            'When whitelist_categories is an empty collection and there are '
+            'no characters specified in whitelist_characters, nothing can '
+            'be generated by the characters() strategy.')
+    whitelist_categories = as_general_categories(
+        whitelist_categories, 'whitelist_categories')
+    both_cats = set(
+        blacklist_categories or ()).intersection(whitelist_categories or ())
+    if both_cats:
+        raise InvalidArgument(
+            'Categories %r are present in both whitelist_categories=%r, and '
+            'blacklist_categories=%r' % (
+                sorted(both_cats), whitelist_categories, blacklist_categories))
 
     from hypothesis.searchstrategy.strings import OneCharStringStrategy
     return OneCharStringStrategy(whitelist_categories=whitelist_categories,
@@ -720,13 +803,20 @@ def text(
     """Generates values of a unicode text type (unicode on python 2, str on
     python 3) with values drawn from alphabet, which should be an iterable of
     length one strings or a strategy generating such. If it is None it will
-    default to generating the full unicode range. If it is an empty collection
-    this will only generate empty strings.
+    default to generating the full unicode range (excluding surrogate
+    characters). If it is an empty collection this will only generate empty
+    strings.
 
-    min_size, max_size and average_size have the usual interpretations.
+    min_size and max_size have the usual interpretations.
 
+    The average_size argument is deprecated.  Internal upgrades since
+    Hypothesis 1.x mean we no longer needed this hint to generate useful data.
+
+    Examples from this strategy shrink towards shorter strings, and with the
+    characters in the text shrinking as per the alphabet strategy.
     """
     from hypothesis.searchstrategy.strings import StringStrategy
+    check_valid_sizes(min_size, average_size, max_size)
     if alphabet is None:
         char_strategy = characters(blacklist_categories=('Cs',))
     elif not alphabet:
@@ -742,8 +832,7 @@ def text(
     else:
         char_strategy = sampled_from(list(map(text_type, alphabet)))
     return StringStrategy(lists(
-        char_strategy, average_size=average_size, min_size=min_size,
-        max_size=max_size
+        char_strategy, min_size=min_size, max_size=max_size
     ))
 
 
@@ -772,6 +861,8 @@ def from_regex(regex):
     string, while ``"."`` will return any string, and ``r"\\A.$"`` will return
     a single character optionally followed by a ``"\\n"``.
 
+    Examples from this strategy shrink towards shorter strings and lower
+    character values.
     """
     from hypothesis.searchstrategy.regex import regex_strategy
     return regex_strategy(regex)
@@ -785,8 +876,13 @@ def binary(
     """Generates the appropriate binary type (str in python 2, bytes in python
     3).
 
-    min_size, average_size and max_size have the usual interpretations.
+    min_size and max_size have the usual interpretations.
 
+    The average_size argument is deprecated.  Internal upgrades since
+    Hypothesis 1.x mean we no longer needed this hint to generate useful data.
+
+    Examples from this strategy shrink towards smaller strings and lower byte
+    values.
     """
     from hypothesis.searchstrategy.strings import BinaryStringStrategy, \
         FixedSizeBytes
@@ -796,7 +892,7 @@ def binary(
     return BinaryStringStrategy(
         lists(
             integers(min_value=0, max_value=255),
-            average_size=average_size, min_size=min_size, max_size=max_size
+            min_size=min_size, max_size=max_size
         )
     )
 
@@ -805,7 +901,10 @@ def binary(
 @defines_strategy
 def randoms():
     """Generates instances of Random (actually a Hypothesis specific
-    RandomWithSeed class which displays what it was initially seeded with)"""
+    RandomWithSeed class which displays what it was initially seeded with)
+
+    Examples from this strategy shrink to seeds closer to zero.
+    """
     from hypothesis.searchstrategy.misc import RandomStrategy
     return RandomStrategy(integers())
 
@@ -832,38 +931,59 @@ def random_module():
     a random number generator you should use the randoms() strategy
     which will give you one.
 
+    Examples from these strategy shrink to seeds closer to zero.
     """
     from hypothesis.control import cleanup
     import random
 
-    def seed_random(seed):
-        state = random.getstate()
-        random.seed(seed)
-        cleanup(lambda: random.setstate(state))
-        return RandomSeeder(seed)
+    class RandomModule(SearchStrategy):
+        def do_draw(self, data):
+            data.can_reproduce_example_from_repr = False
+            seed = data.draw(integers())
+            state = random.getstate()
+            random.seed(seed)
+            cleanup(lambda: random.setstate(state))
+            return RandomSeeder(seed)
 
-    return shared(
-        integers().map(seed_random),
-        'hypothesis.strategies.random_module()',
-    )
+    return shared(RandomModule(), 'hypothesis.strategies.random_module()')
 
 
 @cacheable
 @defines_strategy
-def builds(target, *args, **kwargs):
+def builds(*callable_and_args, **kwargs):
     """Generates values by drawing from ``args`` and ``kwargs`` and passing
-    them to ``target`` in the appropriate argument position.
+    them to the callable (provided as the first positional argument) in the
+    appropriate argument position.
 
     e.g. ``builds(target, integers(), flag=booleans())`` would draw an
     integer ``i`` and a boolean ``b`` and call ``target(i, flag=b)``.
 
-    If ``target`` has type annotations, they will be used to infer a strategy
+    If the callable has type annotations, they will be used to infer a strategy
     for required arguments that were not passed to builds.  You can also tell
     builds to infer a strategy for an optional argument by passing the special
     value :const:`hypothesis.infer` as a keyword argument to
-    builds, instead of a strategy for that argument to ``target``.
+    builds, instead of a strategy for that argument to the callable.
 
+    Examples from this strategy shrink by shrinking the argument values to
+    the callable.
     """
+    if callable_and_args:
+        target, args = callable_and_args[0], callable_and_args[1:]
+        if not callable(target):
+            raise InvalidArgument(
+                'The first positional argument to builds() must be a callable '
+                'target to construct.')
+    elif 'target' in kwargs and callable(kwargs['target']):
+        args = []
+        note_deprecation(
+            'Specifying the target as a keyword argument to builds() is '
+            'deprecated. Provide it as the first positional argument instead.')
+        target = kwargs.pop('target')
+    else:
+        raise InvalidArgument(
+            'builds() must be passed a callable as the first positional '
+            'argument, but no positional arguments were given.')
+
     if infer in args:
         # Avoid an implementation nightmare juggling tuples and worse things
         raise InvalidArgument('infer was passed as a positional argument to '
@@ -883,30 +1003,16 @@ def builds(target, *args, **kwargs):
     )
 
 
-def delay_error(func):
-    """A decorator to make exceptions lazy but success immediate.
-
-    We want from_type to resolve to a strategy immediately if possible,
-    for a useful repr and interactive use, but delay errors until a
-    value would be drawn to localise them to a particular test.
-
-    """
+def _defer_from_type(func):
+    """Decorator to make from_type lazy to support recursive definitions."""
     @proxies(func)
     def inner(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            error = e
-
-            def lazy_error():
-                raise error
-
-            return builds(lazy_error)
+        return deferred(lambda: func(*args, **kwargs))
     return inner
 
 
 @cacheable
-@delay_error
+@_defer_from_type
 def from_type(thing):
     """Looks up the appropriate search strategy for the given type.
 
@@ -932,15 +1038,14 @@ def from_type(thing):
        other elements in the lookup.
     4. Finally, if ``thing`` has type annotations for all required arguments,
        it is resolved via :func:`~hypothesis.strategies.builds`.
-
     """
     from hypothesis.searchstrategy import types
-    if not isinstance(thing, type):
-        try:
+    try:
+        import typing
+        if not isinstance(thing, type):
             # At runtime, `typing.NewType` returns an identity function rather
             # than an actual type, but we can check that for a possible match
             # and then read the magic attribute to unwrap it.
-            import typing
             if all([
                 hasattr(thing, '__supertype__'), hasattr(typing, 'NewType'),
                 isfunction(thing), getattr(thing, '__module__', 0) == 'typing'
@@ -951,8 +1056,16 @@ def from_type(thing):
             if getattr(thing, '__origin__', None) is typing.Union:
                 args = sorted(thing.__args__, key=types.type_sorting_key)
                 return one_of([from_type(t) for t in args])
-        except ImportError:  # pragma: no cover
-            pass
+        # We can't resolve forward references, and under Python 3.5 (only)
+        # a forward reference is an instance of type.  Hence, explicit check:
+        elif type(thing) == typing._ForwardRef:  # pragma: no cover
+            raise ResolutionFailed(
+                'thing=%s cannot be resolved.  Upgrading to python>=3.6 may '
+                'fix this problem via improvements to the typing module.'
+                % (thing,))
+    except ImportError:  # pragma: no cover
+        pass
+    if not isinstance(thing, type):
         raise InvalidArgument('thing=%s must be a type' % (thing,))
     # Now that we know `thing` is a type, the first step is to check for an
     # explicitly registered strategy.  This is the best (and hopefully most
@@ -1030,6 +1143,8 @@ def fractions(min_value=None, max_value=None, max_denominator=None):
     values is no greater than max_denominator. Note that max_denominator must
     be None or a positive integer.
 
+    Examples from this strategy shrink towards smaller denominators, then
+    closer to zero.
     """
     min_value = try_convert(Fraction, min_value, 'min_value')
     max_value = try_convert(Fraction, max_value, 'max_value')
@@ -1112,6 +1227,25 @@ def fractions(min_value=None, max_value=None, max_denominator=None):
         lambda f: f.limit_denominator(max_denominator))
 
 
+def _as_finite_decimal(value, name, allow_infinity):
+    """Convert decimal bounds to decimals, carefully."""
+    assert name in ('min_value', 'max_value')
+    if value is None:
+        return None
+    if not isinstance(value, Decimal):
+        with localcontext(Context()):  # ensure that default traps are enabled
+            value = try_convert(Decimal, value, name)
+    if value.is_finite():
+        return value
+    if value.is_infinite() and (value < 0 if 'min' in name else value > 0):
+        if allow_infinity or allow_infinity is None:
+            return None
+        raise InvalidArgument('allow_infinity=%r, but %s=%r'
+                              % (allow_infinity, name, value))
+    # This could be infinity, quiet NaN, or signalling NaN
+    raise InvalidArgument(u'Invalid %s=%r' % (name, value))
+
+
 @cacheable
 @defines_strategy_with_reusable_values
 def decimals(min_value=None, max_value=None,
@@ -1133,33 +1267,16 @@ def decimals(min_value=None, max_value=None,
     If ``places`` is not None, all finite values drawn from the strategy will
     have that number of digits after the decimal place.
 
+    Examples from this strategy do not have a well defined shrink order but
+    try to maximize human readability when shrinking.
     """
     # Convert min_value and max_value to Decimal values, and validate args
     check_valid_integer(places)
     if places is not None and places < 0:
         raise InvalidArgument('places=%r may not be negative' % places)
-
-    if min_value is not None:
-        min_value = try_convert(Decimal, min_value, 'min_value')
-        if min_value.is_infinite() and min_value < 0:
-            if not (allow_infinity or allow_infinity is None):
-                raise InvalidArgument('allow_infinity=%r, but min_value=%r'
-                                      % (allow_infinity, min_value))
-            min_value = None
-        elif not min_value.is_finite():
-            # This could be positive infinity, quiet NaN, or signalling NaN
-            raise InvalidArgument(u'Invalid min_value=%r' % min_value)
-    if max_value is not None:
-        max_value = try_convert(Decimal, max_value, 'max_value')
-        if max_value.is_infinite() and max_value > 0:
-            if not (allow_infinity or allow_infinity is None):
-                raise InvalidArgument('allow_infinity=%r, but max_value=%r'
-                                      % (allow_infinity, max_value))
-            max_value = None
-        elif not max_value.is_finite():
-            raise InvalidArgument(u'Invalid max_value=%r' % max_value)
+    min_value = _as_finite_decimal(min_value, 'min_value', allow_infinity)
+    max_value = _as_finite_decimal(max_value, 'max_value', allow_infinity)
     check_valid_interval(min_value, max_value, 'min_value', 'max_value')
-
     if allow_infinity and (None not in (min_value, max_value)):
         raise InvalidArgument('Cannot allow infinity between finite bounds')
     # Set up a strategy for finite decimals.  Note that both floating and
@@ -1225,6 +1342,10 @@ def recursive(base, extend, max_leaves=100):
     So e.g. ``False``, ``[True]``, ``[False, []]``, and ``[[[[True]]]]`` are
     all valid values to be drawn from that strategy.
 
+    Examples from this strategy shrink by trying to reduce the amount of
+    recursion and by shrinking according to the shrinking behaviour of base
+    and the result of extend.
+
     """
 
     from hypothesis.searchstrategy.recursive import RecursiveStrategy
@@ -1234,7 +1355,11 @@ def recursive(base, extend, max_leaves=100):
 @defines_strategy
 def permutations(values):
     """Return a strategy which returns permutations of the collection
-    ``values``."""
+    ``values``.
+
+    Examples from this strategy shrink by trying to become closer to the
+    original order of values.
+    """
     from hypothesis.internal.conjecture.utils import integer_range
 
     values = list(values)
@@ -1290,6 +1415,7 @@ def datetimes(
     :py:func:`sampled_from`.  Ensure that simple values such as None or UTC
     are at the beginning of the list for proper minimisation.
 
+    Examples from this strategy shrink towards midnight on January 1st 2000.
     """
     # Why must bounds be naive?  In principle, we could also write a strategy
     # that took aware bounds, but the API and validation is much harder.
@@ -1328,7 +1454,10 @@ def dates(
     min_value=dt.date.min, max_value=dt.date.max,
     min_date=None, max_date=None,
 ):
-    """A strategy for dates between ``min_date`` and ``max_date``."""
+    """A strategy for dates between ``min_date`` and ``max_date``.
+
+    Examples from this strategy shrink towards January 1st 2000.
+    """
     from hypothesis.searchstrategy.datetime import DateStrategy
 
     check_type(dt.date, min_value, 'min_value')
@@ -1352,6 +1481,8 @@ def times(
 
     The ``timezones`` argument is handled as for :py:func:`datetimes`.
 
+    Examples from this strategy shrink towards midnight, with the timezone
+    component shrinking as for the strategy that provided it.
     """
     check_type(dt.time, min_value, 'min_value')
     check_type(dt.time, max_value, 'max_value')
@@ -1375,7 +1506,10 @@ def timedeltas(
     min_value=dt.timedelta.min, max_value=dt.timedelta.max,
     min_delta=None, max_delta=None
 ):
-    """A strategy for timedeltas between ``min_value`` and ``max_value``."""
+    """A strategy for timedeltas between ``min_value`` and ``max_value``.
+
+    Examples from this strategy shrink towards zero.
+    """
     from hypothesis.searchstrategy.datetime import TimedeltaStrategy
 
     check_type(dt.timedelta, min_value, 'min_value')
@@ -1395,9 +1529,12 @@ def composite(f):
     :ref:`the full documentation for more details <composite-strategies>`
     about how to use this function.
 
+    Examples from this strategy shrink by shrinking the output of each draw
+    call.
     """
 
     from hypothesis.internal.reflection import define_function_signature
+    from hypothesis.internal.conjecture.utils import calc_label_from_cls
     argspec = getfullargspec(f)
 
     if (
@@ -1416,6 +1553,8 @@ def composite(f):
               if k in (argspec.args + argspec.kwonlyargs + ['return'])}
     new_argspec = argspec._replace(args=argspec.args[1:], annotations=annots)
 
+    label = calc_label_from_cls(f)
+
     @defines_strategy
     @define_function_signature(f.__name__, f.__doc__, new_argspec)
     def accept(*args, **kwargs):
@@ -1429,9 +1568,97 @@ def composite(f):
                     return data.draw(strategy)
 
                 return f(draw, *args, **kwargs)
+
+            @property
+            def label(self):
+                return label
         return CompositeStrategy()
     accept.__module__ = f.__module__
     return accept
+
+
+@defines_strategy_with_reusable_values
+@cacheable
+def complex_numbers(min_magnitude=0, max_magnitude=None,
+                    allow_infinity=None, allow_nan=None):
+    """Returns a strategy that generates complex numbers.
+
+    This strategy draws complex numbers with constrained magnitudes.
+    The ``min_magnitude`` and ``max_magnitude`` parameters should be
+    non-negative :class:`~python:numbers.Real` numbers; values
+    of ``None`` correspond to zero and infinite values respectively.
+
+    If ``min_magnitude`` is positive or ``max_magnitude`` is finite, it
+    is an error to enable ``allow_nan``.  If ``max_magnitude`` is finite,
+    it is an error to enable ``allow_infinity``.
+
+    The magnitude contraints are respected up to a relative error
+    of (around) floating-point epsilon, due to implementation via
+    the system ``sqrt`` function.
+
+    Examples from this strategy shrink by shrinking their real and
+    imaginary parts, as :func:`~hypothesis.strategies.floats`.
+
+    If you need to generate complex numbers with particular real and
+    imaginary parts or relationships between parts, consider using
+    `builds(complex, ...) <hypothesis.strategies.builds>` or
+    `@composite <hypothesis.strategies.composite>` respectively.
+    """
+    check_valid_magnitude(min_magnitude, 'min_magnitude')
+    check_valid_magnitude(max_magnitude, 'max_magnitude')
+    check_valid_interval(min_magnitude, max_magnitude,
+                         'min_magnitude', 'max_magnitude')
+    if max_magnitude == float('inf'):
+        max_magnitude = None
+    if min_magnitude == 0:
+        min_magnitude = None
+
+    if allow_infinity is None:
+        allow_infinity = bool(max_magnitude is None)
+    elif allow_infinity and max_magnitude is not None:
+        raise InvalidArgument(
+            'Cannot have allow_infinity=%r with max_magnitude=%r' %
+            (allow_infinity, max_magnitude)
+        )
+    if allow_nan is None:
+        allow_nan = bool(min_magnitude is None and max_magnitude is None)
+    elif allow_nan and not (min_magnitude is None and max_magnitude is None):
+        raise InvalidArgument(
+            'Cannot have allow_nan=%r, min_magnitude=%r max_magnitude=%r' %
+            (allow_nan, min_magnitude, max_magnitude)
+        )
+    allow_kw = dict(allow_nan=allow_nan, allow_infinity=allow_infinity)
+
+    if min_magnitude is None and max_magnitude is None:
+        # In this simple but common case, there are no constraints on the
+        # magnitude and therefore no relationship between the real and
+        # imaginary parts.
+        return builds(complex, floats(**allow_kw), floats(**allow_kw))
+
+    @composite
+    def constrained_complex(draw):
+        # Draw the imaginary part, and determine the maximum real part given
+        # this and the max_magnitude
+        if max_magnitude is None:
+            zi = draw(floats(**allow_kw))
+            rmax = float('inf')
+        else:
+            zi = draw(floats(-max_magnitude, max_magnitude, **allow_kw))
+            rmax = cathetus(max_magnitude, zi)
+        # Draw the real part from the allowed range given the imaginary part
+        if min_magnitude is None or math.fabs(zi) >= min_magnitude:
+            zr = draw(floats(-rmax, rmax, **allow_kw))
+        else:
+            zr = draw(floats(cathetus(min_magnitude, zi), rmax, **allow_kw))
+        # Order of conditions carefully tuned so that for a given pair of
+        # magnitude arguments, we always either draw or do not draw the bool
+        # (crucial for good shrinking behaviour) but only invert when needed.
+        if min_magnitude is not None and draw(booleans()) and \
+                math.fabs(zi) <= min_magnitude:
+            zr = -zr
+        return complex(zr, zi)
+
+    return constrained_complex()
 
 
 def shared(base, key=None):
@@ -1449,6 +1676,7 @@ def shared(base, key=None):
     >>> x = shared(s, key="hi")
     >>> y = shared(s, key="hi")
 
+    Examples from this strategy shrink as per their base strategy.
     """
     from hypothesis.searchstrategy.shared import SharedStrategy
     return SharedStrategy(base, key)
@@ -1465,6 +1693,8 @@ def choices():
         Use :func:`data() <hypothesis.strategies.data>` with
         :func:`sampled_from() <hypothesis.strategies.sampled_from>` instead.
 
+    Examples from this strategy shrink by making each choice function return
+    an earlier value in the sequence passed to it.
     """
     from hypothesis.control import note, current_build_context
     from hypothesis.internal.conjecture.utils import choice, check_sample
@@ -1497,6 +1727,7 @@ def choices():
         supports_find = False
 
         def do_draw(self, data):
+            data.can_reproduce_example_from_repr = False
             return Chooser(current_build_context(), data)
 
     return shared(
@@ -1507,16 +1738,26 @@ def choices():
 
 @cacheable
 @defines_strategy_with_reusable_values
-def uuids():
+def uuids(version=None):
     """Returns a strategy that generates :class:`UUIDs <uuid.UUID>`.
+
+    If the optional version argument is given, value is passed through
+    to :class:`~python:uuid.UUID` and only UUIDs of that version will
+    be generated.
 
     All returned values from this will be unique, so e.g. if you do
     ``lists(uuids())`` the resulting list will never contain duplicates.
 
+    Examples from this strategy don't have any meaningful shrink order.
     """
     from uuid import UUID
+    if version not in (None, 1, 2, 3, 4, 5):
+        raise InvalidArgument((
+            'version=%r, but version must be in (None, 1, 2, 3, 4, 5) '
+            'to pass to the uuid.UUID constructor.') % (version, )
+        )
     return shared(randoms(), key='hypothesis.strategies.uuids.generator').map(
-        lambda r: UUID(int=r.getrandbits(128))
+        lambda r: UUID(version=version, int=r.getrandbits(128))
     )
 
 
@@ -1529,6 +1770,7 @@ def runner(default=not_set):
     If there is no current test runner and a default is provided, return
     that default. If no default is provided, raises InvalidArgument.
 
+    Examples from this strategy do not shrink (because there is only one).
     """
     class RunnerStrategy(SearchStrategy):
 
@@ -1559,6 +1801,8 @@ def data():
     See :ref:`the rest of the documentation <interactive-draw>` for more
     complete information.
 
+    Examples from this strategy do not shrink (because there is only one),
+    but the result of calls to each draw() call shrink as they normally would.
     """
     from hypothesis.control import note
 
@@ -1584,6 +1828,8 @@ def data():
         supports_find = False
 
         def do_draw(self, data):
+            data.can_reproduce_example_from_repr = False
+
             if not hasattr(data, 'hypothesis_shared_data_strategy'):
                 data.hypothesis_shared_data_strategy = DataObject(data)
             return data.hypothesis_shared_data_strategy
@@ -1625,7 +1871,6 @@ def register_type_strategy(custom_type, strategy):
 
     ``strategy`` may be a search strategy, or a function that takes a type and
     returns a strategy (useful for generic types).
-
     """
     from hypothesis.searchstrategy import types
     if not isinstance(custom_type, type):
@@ -1638,131 +1883,6 @@ def register_type_strategy(custom_type, strategy):
         raise InvalidArgument('strategy=%r must not be empty')
     types._global_type_lookup[custom_type] = strategy
     from_type.__clear_cache()
-
-# Private API below here
-
-
-@check_function
-def check_type(typ, arg, name=''):
-    if name:
-        name += '='
-    if not isinstance(arg, typ):
-        if isinstance(typ, type):
-            typ_string = typ.__name__
-        else:
-            typ_string = 'one of %s' % (
-                ', '.join(t.__name__ for t in typ))
-        raise InvalidArgument('Expected %s but got %s%r (type=%s)'
-                              % (typ_string, name, arg, type(arg).__name__))
-
-
-@check_function
-def check_strategy(arg, name=''):
-    check_type(SearchStrategy, arg, name)
-
-
-@check_function
-def check_valid_integer(value):
-    """Checks that value is either unspecified, or a valid integer.
-
-    Otherwise raises InvalidArgument.
-
-    """
-    if value is None:
-        return
-    check_type(integer_types, value)
-
-
-@check_function
-def check_valid_bound(value, name):
-    """Checks that value is either unspecified, or a valid interval bound.
-
-    Otherwise raises InvalidArgument.
-
-    """
-    if value is None or isinstance(value, integer_types + (Rational,)):
-        return
-    if math.isnan(value):
-        raise InvalidArgument(u'Invalid end point %s=%r' % (name, value))
-
-
-@check_function
-def try_convert(typ, value, name):
-    if value is None:
-        return None
-    if isinstance(value, typ):
-        return value
-    try:
-        return typ(value)
-    except TypeError:
-        raise InvalidArgument(
-            'Cannot convert %s=%r of type %s to type %s' % (
-                name, value, type(value).__name__, typ.__name__
-            )
-        )
-    except (OverflowError, ValueError):
-        raise InvalidArgument(
-            'Cannot convert %s=%r to type %s' % (
-                name, value, typ.__name__
-            )
-        )
-
-
-@check_function
-def check_valid_size(value, name):
-    """Checks that value is either unspecified, or a valid non-negative size
-    expressed as an integer/float.
-
-    Otherwise raises InvalidArgument.
-
-    """
-    if value is None:
-        return
-    check_type(integer_types + (float,), value)
-    if value < 0:
-        raise InvalidArgument(u'Invalid size %s %r < 0' % (value, name))
-    if isinstance(value, float) and math.isnan(value):
-        raise InvalidArgument(u'Invalid size %s %r' % (value, name))
-
-
-@check_function
-def check_valid_interval(lower_bound, upper_bound, lower_name, upper_name):
-    """Checks that lower_bound and upper_bound are either unspecified, or they
-    define a valid interval on the number line.
-
-    Otherwise raises InvalidArgument.
-
-    """
-    if lower_bound is None or upper_bound is None:
-        return
-    if upper_bound < lower_bound:
-        raise InvalidArgument(
-            'Cannot have %s=%r < %s=%r' % (
-                upper_name, upper_bound, lower_name, lower_bound
-            ))
-
-
-@check_function
-def check_valid_sizes(min_size, average_size, max_size):
-    check_valid_size(min_size, 'min_size')
-    check_valid_size(max_size, 'max_size')
-    check_valid_size(average_size, 'average_size')
-    check_valid_interval(min_size, max_size, 'min_size', 'max_size')
-    check_valid_interval(average_size, max_size, 'average_size', 'max_size')
-    check_valid_interval(min_size, average_size, 'min_size', 'average_size')
-
-    if average_size is not None:
-        if (
-            (max_size is None or max_size > 0) and
-            average_size is not None and average_size <= 0.0
-        ):
-            raise InvalidArgument(
-                'Cannot have average_size=%r < min_size=%r' % (
-                    average_size, min_size
-                ))
-
-
-_AVERAGE_LIST_LENGTH = 5.0
 
 
 @cacheable
@@ -1780,7 +1900,7 @@ def deferred(definition):
     >>> import hypothesis.strategies as st
     >>> x = st.deferred(lambda: st.booleans() | st.tuples(x, x))
     >>> x.example()
-    (False, (False, True))
+    (((False, (True, True)), (False, True)), (True, True))
     >>> x.example()
     True
 
@@ -1789,10 +1909,12 @@ def deferred(definition):
     >>> a = st.deferred(lambda: st.booleans() | b)
     >>> b = st.deferred(lambda: st.tuples(a, a))
     >>> a.example()
-    (((True, True), False), True)
+    True
     >>> b.example()
-    (((( False, ((True, False), (True, True))), True), False), True)
+    (False, (False, ((False, True), False)))
 
+    Examples from this strategy shrink as they normally would from the strategy
+    returned by the definition.
     """
     from hypothesis.searchstrategy.deferred import DeferredStrategy
     return DeferredStrategy(definition)

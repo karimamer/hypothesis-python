@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -21,8 +21,8 @@ import pytest
 
 from hypothesis import find, given, assume, settings
 from hypothesis.database import ExampleDatabase
-from hypothesis.strategies import just, text, lists, floats, tuples, \
-    booleans, integers
+from hypothesis.strategies import just, text, lists, builds, floats, \
+    tuples, booleans, integers
 from hypothesis.internal.compat import Counter
 
 ConstantLists = integers().flatmap(lambda i: lists(just(i)))
@@ -72,7 +72,7 @@ def test_flatmap_retrieve_from_db():
 
 
 def test_flatmap_does_not_reuse_strategies():
-    s = lists(max_size=0).flatmap(just)
+    s = builds(list).flatmap(just)
     assert s.example() is not s.example()
 
 

@@ -36,19 +36,21 @@ intermediate steps of your test. That's where the ``note`` function comes in:
     ...     test_shuffle_is_noop()
     ... except AssertionError:
     ...     print('ls != ls2')
-    Falsifying example: test_shuffle_is_noop(ls=[0, 0, 1], r=RandomWithSeed(0))
-    Shuffle: [0, 1, 0]
+    Falsifying example: test_shuffle_is_noop(ls=[0, 1], r=RandomWithSeed(53))
+    Shuffle: [1, 0]
     ls != ls2
 
 The note is printed in the final run of the test in order to include any
 additional information you might need in your test.
 
 
+.. _statistics:
+
 ---------------
 Test Statistics
 ---------------
 
-If you are using py.test you can see a number of statistics about the executed tests
+If you are using :pypi:`pytest` you can see a number of statistics about the executed tests
 by passing the command line argument ``--hypothesis-show-statistics``. This will include
 some general statistics about the test:
 
@@ -69,15 +71,15 @@ You would see:
 
   test_integers:
 
-    - 200 passing examples, 0 failing examples, 0 invalid examples
-    - Typical runtimes: < 1ms
-    - Stopped because settings.max_examples=200
-
+    - 100 passing examples, 0 failing examples, 0 invalid examples
+    - Typical runtimes: ~ 1ms
+    - Fraction of time spent in data generation: ~ 12%
+    - Stopped because settings.max_examples=100
 
 The final "Stopped because" line is particularly important to note: It tells you the
 setting value that determined when the test should stop trying new examples. This
 can be useful for understanding the behaviour of your tests. Ideally you'd always want
-this to be ``max_examples``.
+this to be :obj:`~hypothesis.settings.max_examples`.
 
 In some cases (such as filtered and recursive strategies) you will see events mentioned
 which describe some aspect of the data generation:
@@ -96,12 +98,13 @@ You would see something like:
 
   test_even_integers:
 
-    - 200 passing examples, 0 failing examples, 16 invalid examples
-    - Typical runtimes: < 1ms
-    - Stopped because settings.max_examples=200
-    - Events:
-      * 30.56%, Retried draw from integers().filter(lambda x: x % 2 == 0) to satisfy filter
-      * 7.41%, Aborted test because unable to satisfy integers().filter(lambda x: x % 2 == 0)
+      - 100 passing examples, 0 failing examples, 36 invalid examples
+      - Typical runtimes: 0-1 ms
+      - Fraction of time spent in data generation: ~ 16%
+      - Stopped because settings.max_examples=100
+      - Events:
+        * 80.88%, Retried draw from integers().filter(lambda x: <unknown>) to satisfy filter
+        * 26.47%, Aborted test because unable to satisfy integers().filter(lambda x: <unknown>)
 
 You can also mark custom events in a test using the ``event`` function:
 
@@ -118,23 +121,23 @@ You can also mark custom events in a test using the ``event`` function:
 
 You will then see output like:
 
-
 .. code-block:: none
 
   test_even_integers:
 
-    - 200 passing examples, 0 failing examples, 28 invalid examples
-    - Typical runtimes: < 1ms
-    - Stopped because settings.max_examples=200
+    - 100 passing examples, 0 failing examples, 38 invalid examples
+    - Typical runtimes: 0-1 ms
+    - Fraction of time spent in data generation: ~ 16%
+    - Stopped because settings.max_examples=100
     - Events:
-      * 47.81%, Retried draw from integers().filter(lambda x: x % 2 == 0) to satisfy filter
-      * 31.14%, i mod 3 = 2
-      * 28.95%, i mod 3 = 1
-      * 27.63%, i mod 3 = 0
-      * 12.28%, Aborted test because unable to satisfy integers().filter(lambda x: x % 2 == 0)
+      * 80.43%, Retried draw from integers().filter(lambda x: <unknown>) to satisfy filter
+      * 31.88%, i mod 3 = 0
+      * 27.54%, Aborted test because unable to satisfy integers().filter(lambda x: <unknown>)
+      * 21.74%, i mod 3 = 1
+      * 18.84%, i mod 3 = 2
 
 Arguments to ``event`` can be any hashable type, but two events will be considered the same
-if they are the same when converted to a string with ``str``.
+if they are the same when converted to a string with :obj:`python:str`.
 
 ------------------
 Making assumptions
@@ -144,8 +147,8 @@ Sometimes Hypothesis doesn't give you exactly the right sort of data you want - 
 mostly of the right shape, but some examples won't work and you don't want to care about
 them. You *can* just ignore these by aborting the test early, but this runs the risk of
 accidentally testing a lot less than you think you are. Also it would be nice to spend
-less time on bad examples - if you're running 200 examples per test (the default) and
-it turns out 150 of those examples don't match your needs, that's a lot of wasted time.
+less time on bad examples - if you're running 100 examples per test (the default) and
+it turns out 70 of those examples don't match your needs, that's a lot of wasted time.
 
 .. autofunction:: hypothesis.assume
 
@@ -279,17 +282,17 @@ If you want to see exactly what a strategy produces you can ask for an example:
 
 .. doctest::
 
-  >>> integers(min_value=0, max_value=10).example()
-  5
+    >>> integers(min_value=0, max_value=10).example()
+    1
 
 Many strategies are built out of other strategies. For example, if you want
 to define a tuple you need to say what goes in each element:
 
 .. doctest::
 
-  >>> from hypothesis.strategies import tuples
-  >>> tuples(integers(), integers()).example()
-  (50, 15)
+    >>> from hypothesis.strategies import tuples
+    >>> tuples(integers(), integers()).example()
+    (-24597, 12566)
 
 Further details are :doc:`available in a separate document <data>`.
 
@@ -373,7 +376,7 @@ using :func:`@given <hypothesis.given>` with instance methods works: ``self``
 will be passed to the function as normal and not be parametrized over.
 
 The function returned by given has all the same arguments as the original
-test, minus those that are filled in by ``given``.
+test, minus those that are filled in by :func:`@given <hypothesis.given>`.
 
 -------------------------
 Custom function execution
@@ -384,6 +387,8 @@ examples.
 
 This lets you do things like set up and tear down around each example, run
 examples in a subprocess, transform coroutine tests into normal tests, etc.
+For example, :class:`~hypothesis.extra.django.TransactionTestCase` in the
+Django extra runs each example in a separate database transaction.
 
 The way this works is by introducing the concept of an executor. An executor
 is essentially a function that takes a block of code and run it. The default
@@ -394,7 +399,7 @@ executor is:
     def default_executor(function):
         return function()
 
-You define executors by defining a method execute_example on a class. Any
+You define executors by defining a method ``execute_example`` on a class. Any
 test methods on that class with :func:`@given <hypothesis.given>` used on them will use
 ``self.execute_example`` as an executor with which to run tests. For example,
 the following executor runs all its code twice:
@@ -455,14 +460,14 @@ experimenting with conditions for filtering data.
 
 .. doctest::
 
-  >>> from hypothesis import find
-  >>> from hypothesis.strategies import sets, lists, integers
-  >>> find(lists(integers()), lambda x: sum(x) >= 10)
-  [10]
-  >>> find(lists(integers()), lambda x: sum(x) >= 10 and len(x) >= 3)
-  [0, 0, 10]
-  >>> find(sets(integers()), lambda x: sum(x) >= 10 and len(x) >= 3)
-  {0, 1, 9}
+    >>> from hypothesis import find
+    >>> from hypothesis.strategies import sets, lists, integers
+    >>> find(lists(integers()), lambda x: sum(x) >= 10)
+    [10]
+    >>> find(lists(integers()), lambda x: sum(x) >= 10 and len(x) >= 3)
+    [0, 0, 10]
+    >>> find(sets(integers()), lambda x: sum(x) >= 10 and len(x) >= 3)
+    {0, 1, 9}
 
 The first argument to :func:`~hypothesis.find` describes data in the usual way for an argument to
 :func:`~hypothesis.given`, and supports :doc:`all the same data types <data>`. The second is a
@@ -473,70 +478,14 @@ example to a condition that is always false it will raise an error:
 
 .. doctest::
 
-  >>> find(integers(), lambda x: False)
-  Traceback (most recent call last):
-  ...
-  hypothesis.errors.NoSuchExample: No examples of condition lambda x: <unknown>
+    >>> find(integers(), lambda x: False)
+    Traceback (most recent call last):
+        ...
+    hypothesis.errors.NoSuchExample: No examples of condition lambda x: <unknown>
 
 (The ``lambda x: unknown`` is because Hypothesis can't retrieve the source code
 of lambdas from the interactive python console. It gives a better error message
 most of the time which contains the actual condition)
-
-
-.. _providing-explicit-examples:
-
----------------------------
-Providing explicit examples
----------------------------
-
-You can explicitly ask Hypothesis to try a particular example, using
-
-.. autofunction:: hypothesis.example
-
-Hypothesis will run all examples you've asked for first. If any of them fail it
-will not go on to look for more examples.
-
-It doesn't matter whether you put the example decorator before or after given.
-Any permutation of the decorators in the above will do the same thing.
-
-Note that examples can be positional or keyword based. If they're positional then
-they will be filled in from the right when calling, so either of the following
-styles will work as expected:
-
-.. code:: python
-
-  @given(text())
-  @example("Hello world")
-  @example(x="Some very long string")
-  def test_some_code(x):
-      assert True
-
-  from unittest import TestCase
-
-  class TestThings(TestCase):
-      @given(text())
-      @example("Hello world")
-      @example(x="Some very long string")
-      def test_some_code(self, x):
-          assert True
-
-It is *not* permitted for a single example to be a mix of positional and
-keyword arguments. Either are fine, and you can use one in one example and the
-other in another example if for some reason you really want to, but a single
-example must be consistent.
-
-
--------------------------------------
-Reproducing a test run with ``@seed``
--------------------------------------
-
-When a test fails, either with a health check failure or a falsifying example,
-Hypothesis will print out a seed that led to that failure, if the test is not
-already running with a fixed seed. You can then recreate that failure using either
-the ``@seed`` decorator or (if you are running pytest) with ``--hypothesis-seed``.
-This is often useful to locally reproduce test failures from other developers or CI.
-
-.. autofunction:: hypothesis.seed
 
 
 .. _type-inference:
@@ -562,7 +511,7 @@ argument, to force this inference for arguments with a default value.
     >>> def func(a: int, b: str):
     ...     return [a, b]
     >>> builds(func).example()
-    [2132, 'jZFN;']
+    [-6993, '']
 
 :func:`@given <hypothesis.given>` does not perform any implicit inference
 for required arguments, as this would break compatibility with pytest fixtures.

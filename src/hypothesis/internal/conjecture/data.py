@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -20,10 +20,17 @@ from __future__ import division, print_function, absolute_import
 import sys
 from enum import IntEnum
 
-from hypothesis.errors import Frozen, InvalidArgument
+import attr
+
+from hypothesis.errors import Frozen, StopTest, InvalidArgument
 from hypothesis.internal.compat import hbytes, hrange, text_type, \
     bit_length, benchmark_time, int_from_bytes, unicode_safe_repr
 from hypothesis.internal.coverage import IN_COVERAGE_TESTS
+from hypothesis.internal.escalation import mark_for_escalation
+from hypothesis.internal.conjecture.utils import calc_label_from_name
+
+TOP_LABEL = calc_label_from_name('top')
+DRAW_BYTES_LABEL = calc_label_from_name('draw_bytes() in ConjectureData')
 
 
 class Status(IntEnum):
@@ -33,11 +40,34 @@ class Status(IntEnum):
     INTERESTING = 3
 
 
-class StopTest(BaseException):
+@attr.s(slots=True)
+class Example(object):
+    depth = attr.ib()
+    label = attr.ib()
+    start = attr.ib()
+    end = attr.ib(default=None)
+    discarded = attr.ib(default=None)
 
-    def __init__(self, testcounter):
-        super(StopTest, self).__init__(repr(testcounter))
-        self.testcounter = testcounter
+    @property
+    def length(self):
+        return self.end - self.start
+
+
+@attr.s(hash=False, cmp=False, slots=True)
+class StructuralTag(object):
+    label = attr.ib()
+
+
+STRUCTURAL_TAGS = {}
+
+
+def structural_tag(label):
+    try:
+        return STRUCTURAL_TAGS[label]
+    except KeyError:
+        result = StructuralTag(label)
+        STRUCTURAL_TAGS[label] = result
+        return result
 
 
 global_test_counter = 0
@@ -69,9 +99,6 @@ class ConjectureData(object):
         self.output = u''
         self.status = Status.VALID
         self.frozen = False
-        self.intervals_by_level = []
-        self.intervals = []
-        self.interval_stack = []
         global global_test_counter
         self.testcounter = global_test_counter
         global_test_counter += 1
@@ -81,6 +108,14 @@ class ConjectureData(object):
         self.capped_indices = {}
         self.interesting_origin = None
         self.tags = set()
+        self.draw_times = []
+        self.__intervals = None
+
+        self.examples = []
+        self.example_stack = []
+        self.has_discards = False
+
+        self.start_example(TOP_LABEL)
 
     def __assert_not_frozen(self, name):
         if self.frozen:
@@ -93,7 +128,9 @@ class ConjectureData(object):
 
     @property
     def depth(self):
-        return len(self.interval_stack)
+        # We always have a single example wrapping everything. We want to treat
+        # that as depth 0 rather than depth 1.
+        return self.level - 1
 
     @property
     def index(self):
@@ -105,7 +142,7 @@ class ConjectureData(object):
             value = unicode_safe_repr(value)
         self.output += value
 
-    def draw(self, strategy):
+    def draw(self, strategy, label=None):
         if self.is_find and not strategy.supports_find:
             raise InvalidArgument((
                 'Cannot use strategy %r within a call to find (presumably '
@@ -122,37 +159,52 @@ class ConjectureData(object):
             original_tracer = sys.gettrace()
             try:
                 sys.settrace(None)
-                return self.__draw(strategy)
+                return self.__draw(strategy, label=label)
             finally:
                 sys.settrace(original_tracer)
         else:
-            return self.__draw(strategy)
+            return self.__draw(strategy, label=label)
 
-    def __draw(self, strategy):
-        self.start_example()
+    def __draw(self, strategy, label):
+        at_top_level = self.depth == 0
+        if label is None:
+            label = strategy.label
+        self.start_example(label=label)
         try:
-            return strategy.do_draw(self)
+            if not at_top_level:
+                return strategy.do_draw(self)
+            else:
+                start_time = benchmark_time()
+                try:
+                    return strategy.do_draw(self)
+                except BaseException as e:
+                    mark_for_escalation(e)
+                    raise
+                finally:
+                    self.draw_times.append(benchmark_time() - start_time)
         finally:
-            if not self.frozen:
-                self.stop_example()
+            self.stop_example()
 
-    def start_example(self):
+    def start_example(self, label):
         self.__assert_not_frozen('start_example')
-        self.interval_stack.append(self.index)
         self.level += 1
+        i = len(self.examples)
+        self.examples.append(Example(
+            depth=self.depth, label=label, start=self.index))
+        self.example_stack.append(i)
 
-    def stop_example(self):
+    def stop_example(self, discard=False):
         if self.frozen:
             return
         self.level -= 1
-        while self.level >= len(self.intervals_by_level):
-            self.intervals_by_level.append([])
-        k = self.interval_stack.pop()
-        if k != self.index:
-            t = (k, self.index)
-            self.intervals_by_level[self.level].append(t)
-            if not self.intervals or self.intervals[-1] != t:
-                self.intervals.append(t)
+
+        k = self.example_stack.pop()
+        ex = self.examples[k]
+        ex.end = self.index
+        ex.discarded = discard
+
+        if discard:
+            self.has_discards = True
 
     def note_event(self, event):
         self.events.add(event)
@@ -161,18 +213,27 @@ class ConjectureData(object):
         if self.frozen:
             assert isinstance(self.buffer, hbytes)
             return
-        self.frozen = True
         self.finish_time = benchmark_time()
 
-        # Intervals are sorted as longest first, then by interval start.
-        for l in self.intervals_by_level:
-            for i in hrange(len(l) - 1):
-                if l[i][1] == l[i + 1][0]:
-                    self.intervals.append((l[i][0], l[i + 1][1]))
-        self.intervals = sorted(
-            set(self.intervals),
-            key=lambda se: (se[0] - se[1], se[0])
-        )
+        while self.example_stack:
+            self.stop_example()
+
+        self.frozen = True
+
+        if self.status >= Status.VALID:
+            discards = []
+            for ex in self.examples:
+                if ex.length == 0:
+                    continue
+                if discards:
+                    u, v = discards[-1]
+                    if u <= ex.start <= ex.end <= v:
+                        continue
+                if ex.discarded:
+                    discards.append((ex.start, ex.end))
+                    continue
+                self.tags.add(structural_tag(ex.label))
+
         self.buffer = hbytes(self.buffer)
         self.events = frozenset(self.events)
         del self._draw_bytes
@@ -221,16 +282,17 @@ class ConjectureData(object):
         assert len(result) == n
         assert self.index == initial
         self.buffer.extend(result)
-        self.intervals.append((initial, self.index))
 
     def draw_bytes(self, n):
         self.__assert_not_frozen('draw_bytes')
         if n == 0:
             return hbytes(b'')
         self.__check_capacity(n)
+        self.start_example(DRAW_BYTES_LABEL)
         result = self._draw_bytes(self, n)
         assert len(result) == n
         self.__write(result)
+        self.stop_example()
         return hbytes(result)
 
     def mark_interesting(self, interesting_origin=None):

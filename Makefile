@@ -34,9 +34,6 @@ TOOL_VIRTUALENV:=$(BUILD_RUNTIMES)/virtualenvs/tools-$(shell scripts/tool-hash.p
 TOOL_PYTHON=$(TOOL_VIRTUALENV)/bin/python
 TOOL_PIP=$(TOOL_VIRTUALENV)/bin/pip
 
-BENCHMARK_VIRTUALENV:=$(BUILD_RUNTIMES)/virtualenvs/benchmark-$(shell scripts/tool-hash.py benchmark)
-BENCHMARK_PYTHON=$(BENCHMARK_VIRTUALENV)/bin/python
-
 FILES_TO_FORMAT=$(BEST_PY3) scripts/files-to-format.py
 
 
@@ -66,11 +63,6 @@ $(TOOL_VIRTUALENV): $(BEST_PY3)
 	$(BEST_PY3) -m virtualenv $(TOOL_VIRTUALENV)
 	$(TOOL_PIP) install -r requirements/tools.txt
 
-$(BENCHMARK_VIRTUALENV): $(BEST_PY3)
-	rm -rf $(BUILD_RUNTIMES)/virtualenvs/benchmark-*
-	$(BEST_PY3) -m virtualenv $(BENCHMARK_VIRTUALENV)
-	$(BENCHMARK_PYTHON) -m pip install -r requirements/benchmark.txt
-
 $(TOOLS): $(TOOL_VIRTUALENV)
 	mkdir -p $(TOOLS)
 
@@ -85,7 +77,7 @@ format: $(PYFORMAT) $(ISORT)
 	$(FILES_TO_FORMAT) | xargs $(PYFORMAT) -i
 
 lint: $(FLAKE8)
-	$(FLAKE8) src tests --exclude=compat.py,test_reflection.py,test_imports.py,tests/py2,test_lambda_formatting.py --ignore=E731,E721,E722
+	$(FLAKE8) src tests
 
 
 check-pyup-yml: $(TOOL_VIRTUALENV)
@@ -153,8 +145,9 @@ check-pytest30: $(TOX)
 check-pytest28: $(TOX)
 	$(TOX) --recreate -e pytest28
 
-check-quality: $(TOX)
+check-quality: $(TOX) $(PY27)
 	$(TOX) --recreate -e quality
+	$(TOX) --recreate -e quality2
 
 check-ancient-pip: $(PY273)
 	scripts/check-ancient-pip.sh $(PY273)
@@ -165,28 +158,28 @@ check-pytest: check-pytest28 check-pytest30
 check-faker070: $(TOX)
 	$(TOX) --recreate -e faker070
 
-check-faker071: $(TOX)
-	$(TOX) --recreate -e faker071
-
-check-django18: $(TOX)
-	$(TOX) --recreate -e django18
-
-check-django110: $(TOX)
-	$(TOX) --recreate -e django110
+check-faker-latest: $(TOX)
+	$(TOX) --recreate -e faker-latest
 
 check-django111: $(TOX)
 	$(TOX) --recreate -e django111
 
-check-django: check-django18 check-django110 check-django111
+check-django20: $(BEST_PY3) $(TOX)
+	$(TOX) --recreate -e django20
 
-check-pandas18: $(TOX)
-	$(TOX) --recreate -e pandas18
+check-django: check-django111 check-django20
 
 check-pandas19: $(TOX)
 	$(TOX) --recreate -e pandas19
 
 check-pandas20: $(TOX)
 	$(TOX) --recreate -e pandas20
+
+check-pandas21: $(TOX)
+	$(TOX) --recreate -e pandas21
+
+check-pandas22: $(TOX)
+	$(TOX) --recreate -e pandas22
 
 check-examples2: $(TOX) $(PY27)
 	$(TOX) --recreate -e examples2
@@ -217,14 +210,12 @@ check-rst: $(RSTLINT) $(FLAKE8)
 	$(FLAKE8) --select=W191,W291,W292,W293,W391 *.rst docs/*.rst
 
 compile-requirements: $(PIPCOMPILE)
-	$(PIPCOMPILE) requirements/benchmark.in --output-file requirements/benchmark.txt
 	$(PIPCOMPILE) requirements/test.in --output-file requirements/test.txt
 	$(PIPCOMPILE) requirements/tools.in --output-file requirements/tools.txt
 	$(PIPCOMPILE) requirements/typing.in --output-file requirements/typing.txt
 	$(PIPCOMPILE) requirements/coverage.in --output-file requirements/coverage.txt
 
 upgrade-requirements:
-	$(PIPCOMPILE) --upgrade requirements/benchmark.in --output-file requirements/benchmark.txt
 	$(PIPCOMPILE) --upgrade requirements/test.in --output-file requirements/test.txt
 	$(PIPCOMPILE) --upgrade requirements/tools.in --output-file requirements/tools.txt
 	$(PIPCOMPILE) --upgrade requirements/typing.in --output-file requirements/typing.txt
@@ -238,21 +229,6 @@ secrets.tar.enc: deploy_key .pypirc
 	tar -cf secrets.tar deploy_key .pypirc
 	travis encrypt-file secrets.tar
 	rm secrets.tar
-
-check-benchmark: $(BENCHMARK_VIRTUALENV)
-	PYTHONPATH=src $(BENCHMARK_PYTHON) scripts/benchmarks.py --check --nruns=100
-
-build-new-benchmark-data: $(BENCHMARK_VIRTUALENV)
-	PYTHONPATH=src $(BENCHMARK_PYTHON) scripts/benchmarks.py --skip-existing --nruns=1000
-
-update-improved-benchmark-data: $(BENCHMARK_VIRTUALENV)
-	PYTHONPATH=src $(BENCHMARK_PYTHON) scripts/benchmarks.py --update=improved --nruns=1000
-
-update-all-benchmark-data: $(BENCHMARK_VIRTUALENV)
-	PYTHONPATH=src $(BENCHMARK_PYTHON) scripts/benchmarks.py --update=all --nruns=1000
-
-update-benchmark-headers: $(BENCHMARK_VIRTUALENV)
-	PYTHONPATH=src $(BENCHMARK_PYTHON) scripts/benchmarks.py --only-update-headers
 
 $(TOX): $(BEST_PY3) tox.ini $(TOOLS)
 	rm -f $(TOX)
@@ -296,3 +272,6 @@ documentation: $(SPHINX_BUILD) docs/*.rst RELEASE.rst
 
 doctest: $(SPHINX_BUILD) docs/*.rst
 	PYTHONPATH=src $(SPHINX_BUILD) -W -b doctest -d docs/_build/doctrees docs docs/_build/html
+
+fix_doctests: $(TOOL_VIRTUALENV)
+	PYTHONPATH=src $(TOOL_PYTHON) scripts/fix_doctests.py

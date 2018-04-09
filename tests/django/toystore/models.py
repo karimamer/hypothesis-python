@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -27,7 +27,7 @@ class Company(models.Model):
 
 class Store(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    company = models.ForeignKey(Company, null=False)
+    company = models.ForeignKey(Company, null=False, on_delete=models.CASCADE)
 
 
 class CharmField(models.Field):
@@ -63,15 +63,15 @@ class CouldBeCharming(models.Model):
 
 
 class SelfLoop(models.Model):
-    me = models.ForeignKey(u'self', null=True)
+    me = models.ForeignKey(u'self', null=True, on_delete=models.SET_NULL)
 
 
 class LoopA(models.Model):
-    b = models.ForeignKey(u'LoopB', null=False)
+    b = models.ForeignKey(u'LoopB', null=False, on_delete=models.CASCADE)
 
 
 class LoopB(models.Model):
-    a = models.ForeignKey(u'LoopA', null=True)
+    a = models.ForeignKey(u'LoopA', null=True, on_delete=models.SET_NULL)
 
 
 class ManyNumerics(models.Model):
@@ -104,7 +104,7 @@ class CustomishDefault(models.Model):
 
 class MandatoryComputed(models.Model):
     name = models.CharField(max_length=100, unique=True)
-    company = models.ForeignKey(Company, null=False)
+    company = models.ForeignKey(Company, null=False, on_delete=models.CASCADE)
 
     def __init__(self, **kw):
         if u'company' in kw:

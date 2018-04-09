@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -18,8 +18,9 @@
 from __future__ import division, print_function, absolute_import
 
 import sys
-import operator
+from random import Random
 from fractions import Fraction
+from functools import reduce
 
 import pytest
 from flaky import flaky
@@ -30,7 +31,7 @@ from tests.common.debug import minimal
 from hypothesis.strategies import just, sets, text, lists, tuples, \
     booleans, integers, fractions, frozensets, dictionaries, \
     sampled_from
-from hypothesis.internal.compat import PY3, OrderedDict, hrange, reduce
+from hypothesis.internal.compat import PY3, OrderedDict, hrange
 
 
 def test_integers_from_minimizes_leftwards():
@@ -47,7 +48,7 @@ def test_minimal_fractions_2():
 
 def test_minimal_fractions_3():
     assert minimal(
-        lists(fractions()), lambda s: len(s) >= 20) == [Fraction(0)] * 20
+        lists(fractions()), lambda s: len(s) >= 5) == [Fraction(0)] * 5
 
 
 def test_minimize_string_to_empty():
@@ -89,10 +90,8 @@ def test_minimize_3_set_of_tuples():
 
 def test_minimize_sets_of_sets():
     elements = integers(1, 100)
-    size = 10
-    set_of_sets = minimal(
-        sets(frozensets(elements)), lambda s: len(s) >= size
-    )
+    size = 8
+    set_of_sets = minimal(sets(frozensets(elements), min_size=size))
     assert frozenset() in set_of_sets
     assert len(set_of_sets) == size
     for s in set_of_sets:
@@ -201,30 +200,32 @@ def test_minimize_long():
 
 
 def test_find_large_union_list():
+    size = 10
+
     def large_mostly_non_overlapping(xs):
-        assume(xs)
-        assume(all(xs))
-        union = reduce(operator.or_, xs)
-        return len(union) >= 30
+        union = reduce(set.union, xs)
+        return len(union) >= size
 
     result = minimal(
-        lists(sets(integers())),
+        lists(sets(integers(), min_size=1), min_size=1),
         large_mostly_non_overlapping, timeout_after=120)
-    union = reduce(operator.or_, result)
-    assert len(union) == 30
+    assert len(result) == 1
+    union = reduce(set.union, result)
+    assert len(union) == size
     assert max(union) == min(union) + len(union) - 1
-    for x in result:
-        for y in result:
-            if x is not y:
-                assert not (x & y)
 
 
 @pytest.mark.parametrize('n', [0, 1, 10, 100, 1000])
-def test_containment(n):
+@pytest.mark.parametrize(
+    'seed',
+    [13878544811291720918, 15832355027548327468, 12901656430307478246]
+)
+def test_containment(n, seed):
     iv = minimal(
         tuples(lists(integers()), integers()),
         lambda x: x[1] in x[0] and x[1] >= n,
-        timeout_after=60
+        timeout_after=60,
+        random=Random(seed),
     )
     assert iv == ([n], n)
 
@@ -235,3 +236,13 @@ def test_duplicate_containment():
         lambda s: s[0].count(s[1]) > 1, timeout_after=100)
     assert ls == [0, 0]
     assert i == 0
+
+
+@pytest.mark.parametrize('seed', [11, 28, 37])
+def test_reordering_bytes(seed):
+    ls = minimal(
+        lists(integers()), lambda x: sum(x) >= 10 and len(x) >= 3,
+        random=Random(seed),
+    )
+
+    assert ls == sorted(ls)

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -18,20 +18,19 @@
 from __future__ import division, print_function, absolute_import
 
 import os
-import warnings
 from tempfile import mkdtemp
+from warnings import filterwarnings
 
 from hypothesis import settings, unlimited
-from hypothesis.errors import HypothesisDeprecationWarning
 from hypothesis.configuration import set_hypothesis_home_dir
-from hypothesis.internal.compat import PYPY
 from hypothesis.internal.charmap import charmap, charmap_file
 from hypothesis.internal.coverage import IN_COVERAGE_TESTS
 
 
 def run():
-    warnings.filterwarnings('error', category=UnicodeWarning)
-    warnings.filterwarnings('error', category=HypothesisDeprecationWarning)
+    filterwarnings('error')
+    filterwarnings('ignore', category=ImportWarning)
+    filterwarnings('ignore', category=FutureWarning, module='pandas._version')
 
     set_hypothesis_home_dir(mkdtemp())
 
@@ -54,7 +53,7 @@ def run():
             )
 
     settings.register_profile('default', settings(
-        timeout=unlimited, use_coverage=not (IN_COVERAGE_TESTS or PYPY)))
+        timeout=unlimited, use_coverage=not IN_COVERAGE_TESTS))
 
     settings.register_profile('with_coverage', settings(
         timeout=unlimited, use_coverage=True,

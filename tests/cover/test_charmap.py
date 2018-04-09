@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -165,3 +165,7 @@ def test_regenerate_broken_charmap_file():
 
     cm._charmap = None
     cm.charmap()
+
+
+def test_exclude_characters_are_included_in_key():
+    assert cm.query() != cm.query(exclude_characters='0')

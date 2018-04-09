@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -25,13 +25,11 @@ from hypothesis.errors import InvalidArgument
 
 
 class RandomWithSeed(Random):
-
     """A subclass of Random designed to expose the seed it was initially
     provided with.
 
     We consistently use this instead of Random objects because it makes
     examples much easier to recreate.
-
     """
 
     def __init__(self, seed):
@@ -51,7 +49,6 @@ class RandomWithSeed(Random):
 
 
 class Stream(object):
-
     """A stream is a possibly infinite list. You can index into it, and you can
     iterate over it, but you can't ask its length and iterating over it will
     not necessarily terminate.
@@ -62,7 +59,6 @@ class Stream(object):
     Internally Hypothesis uses the fact that you can tell how much of a stream
     has been evaluated, but you shouldn't use that. The only public APIs of
     a Stream are that you can index, slice, and iterate it.
-
     """
 
     def __init__(self, generator=None):

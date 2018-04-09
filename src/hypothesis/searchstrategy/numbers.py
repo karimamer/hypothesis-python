@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -22,19 +22,16 @@ import math
 import hypothesis.internal.conjecture.utils as d
 import hypothesis.internal.conjecture.floats as flt
 from hypothesis.control import assume
-from hypothesis.internal.compat import int_from_bytes
 from hypothesis.internal.floats import sign
-from hypothesis.searchstrategy.strategies import SearchStrategy, \
-    MappedSearchStrategy
+from hypothesis.internal.conjecture.utils import calc_label_from_name
+from hypothesis.searchstrategy.strategies import SearchStrategy
 
 
 class IntStrategy(SearchStrategy):
-
     """A generic strategy for integer types that provides the basic methods
     other than produce.
 
     Subclasses should provide the produce method.
-
     """
 
 
@@ -55,24 +52,26 @@ class IntegersFromStrategy(SearchStrategy):
 
 class WideRangeIntStrategy(IntStrategy):
 
+    distribution = d.Sampler([
+        4.0, 8.0, 1.0, 1.0, 0.5
+    ])
+
+    sizes = [8, 16, 32, 64, 128]
+
     def __repr__(self):
         return 'WideRangeIntStrategy()'
 
     def do_draw(self, data):
-        size = 16
-        sign_mask = 2 ** (size * 8 - 1)
-
-        byt = data.draw_bytes(size)
-        r = int_from_bytes(byt)
-        negative = r & sign_mask
-        r &= (~sign_mask)
-        if negative:
+        size = self.sizes[self.distribution.sample(data)]
+        r = data.draw_bits(size)
+        sign = r & 1
+        r >>= 1
+        if sign:
             r = -r
         return int(r)
 
 
 class BoundedIntStrategy(SearchStrategy):
-
     """A strategy for providing integers in some interval with inclusive
     endpoints."""
 
@@ -98,9 +97,11 @@ NASTY_FLOATS = sorted([
 NASTY_FLOATS = list(map(float, NASTY_FLOATS))
 NASTY_FLOATS.extend([-x for x in NASTY_FLOATS])
 
+FLOAT_STRATEGY_DO_DRAW_LABEL = calc_label_from_name(
+    'getting another float in FloatStrategy')
+
 
 class FloatStrategy(SearchStrategy):
-
     """Generic superclass for strategies which produce floats."""
 
     def __init__(self, allow_infinity, allow_nan):
@@ -112,8 +113,8 @@ class FloatStrategy(SearchStrategy):
 
         self.nasty_floats = [f for f in NASTY_FLOATS if self.permitted(f)]
         weights = [
-            0.6 * len(self.nasty_floats)
-        ] + [0.4] * len(self.nasty_floats)
+            0.2 * len(self.nasty_floats)
+        ] + [0.8] * len(self.nasty_floats)
         self.sampler = d.Sampler(weights)
 
     def __repr__(self):
@@ -129,7 +130,7 @@ class FloatStrategy(SearchStrategy):
 
     def do_draw(self, data):
         while True:
-            data.start_example()
+            data.start_example(FLOAT_STRATEGY_DO_DRAW_LABEL)
             i = self.sampler.sample(data)
             if i == 0:
                 result = flt.draw_float(data)
@@ -146,12 +147,10 @@ def float_order_key(k):
 
 
 class FixedBoundedFloatStrategy(SearchStrategy):
-
     """A strategy for floats distributed between two endpoints.
 
     The conditional distribution tries to produce values clustered
     closer to one of the ends.
-
     """
 
     def __init__(self, lower_bound, upper_bound):
@@ -184,16 +183,3 @@ class FixedBoundedFloatStrategy(SearchStrategy):
             if f == g:
                 f = math.copysign(f, g)
         return f
-
-
-class ComplexStrategy(MappedSearchStrategy):
-
-    """A strategy over complex numbers, with real and imaginary values
-    distributed according to some provided strategy for floating point
-    numbers."""
-
-    def __repr__(self):
-        return 'ComplexStrategy()'
-
-    def pack(self, value):
-        return complex(*value)

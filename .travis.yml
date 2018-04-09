@@ -33,9 +33,9 @@ env:
         - TASK=check-shellcheck
         - TASK=documentation
         - TASK=lint
+        - TASK=doctest
         - TASK=check-rst
         - TASK=check-format
-        - TASK=check-benchmark
         - TASK=check-coverage
         - TASK=check-requirements
         - TASK=check-pypy
@@ -56,17 +56,17 @@ env:
         - TASK=check-nose
         - TASK=check-pytest28
         - TASK=check-faker070
-        - TASK=check-faker071
-        - TASK=check-django18
-        - TASK=check-django110
+        - TASK=check-faker-latest
+        - TASK=check-django20
         - TASK=check-django111
-        - TASK=check-pandas18
         - TASK=check-pandas19
         - TASK=check-pandas20
+        - TASK=check-pandas21
+        - TASK=check-pandas22
         - TASK=deploy
 
 script:
-    - make $TASK
+    - python scripts/run_travis_make_task.py
 
 matrix:
     fast_finish: true

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -27,7 +27,6 @@ a fruitful source of testing with Hypothesis.
 
 It also has an example of testing invariants in response to changes in the
 underlying data.
-
 """
 
 from __future__ import division, print_function, absolute_import
@@ -79,25 +78,24 @@ def test_decodes_to_starting_sequence(ls):
     original sequence back.
 
     Otherwise we've done something very wrong.
-
     """
     assert run_length_decode(run_length_encode(ls)) == ls
 
 
-@given(Lists, st.integers(0, 100))
-def test_duplicating_an_element_does_not_increase_length(ls, i):
+@given(Lists, st.data())
+def test_duplicating_an_element_does_not_increase_length(ls, data):
     """The previous test could be passed by simply returning the input sequence
     so we need something that tests the compression property of our encoding.
 
     In this test we deliberately introduce or extend a run and assert
     that this does not increase the length of our encoding, because they
     should be part of the same run in the final result.
-
     """
     # We use assume to get a valid index into the list. We could also have used
     # e.g. flatmap, but this is relatively straightforward and will tend to
     # perform better.
-    assume(i < len(ls))
+    assume(ls)
+    i = data.draw(st.integers(0, len(ls) - 1))
     ls2 = list(ls)
     # duplicating the value at i right next to it guarantees they are part of
     # the same run in the resulting compression.

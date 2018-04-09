@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -24,12 +24,17 @@ from hypothesis.errors import NoExamples, NoSuchExample, Unsatisfiable, \
     UnsatisfiedAssumption
 from hypothesis.control import assume, reject, _current_build_context
 from hypothesis._settings import note_deprecation
-from hypothesis.internal.compat import hrange
+from hypothesis.internal.compat import hrange, bit_length
 from hypothesis.utils.conventions import UniqueIdentifier
 from hypothesis.internal.lazyformat import lazyformat
 from hypothesis.internal.reflection import get_pretty_function_description
+from hypothesis.internal.conjecture.utils import LABEL_MASK, \
+    combine_labels, calc_label_from_cls, calc_label_from_name
 
 calculating = UniqueIdentifier('calculating')
+
+MAPPED_SEARCH_STRATEGY_DO_DRAW_LABEL = calc_label_from_name(
+    'another attempted draw in MappedSearchStrategy')
 
 
 def one_of_strategies(xs):
@@ -41,7 +46,6 @@ def one_of_strategies(xs):
 
 
 class SearchStrategy(object):
-
     """A SearchStrategy is an object that knows how to explore data of a given
     type.
 
@@ -49,11 +53,11 @@ class SearchStrategy(object):
     the public API and their behaviour may change significantly between
     minor version releases. They will generally be stable between patch
     releases.
-
     """
 
     supports_find = True
     validate_called = False
+    __label = None
 
     def recursive_property(name, default):
         """Handle properties which may be mutually recursive among a set of
@@ -80,7 +84,6 @@ class SearchStrategy(object):
         Michael D., Celeste Hollenbeck, and Matthew Might. "On the complexity
         and performance of parsing with derivatives." ACM SIGPLAN Notices 51.6
         (2016): 224-236.
-
         """
         cache_key = 'cached_' + name
         calculation = 'calc_' + name
@@ -231,7 +234,6 @@ class SearchStrategy(object):
         exploration of the API, not for any sort of real testing.
 
         This method is part of the public API.
-
         """
         context = _current_build_context.value
         if context is not None:
@@ -300,7 +302,6 @@ class SearchStrategy(object):
         from this strategy and then calling pack() on the result, giving that.
 
         This method is part of the public API.
-
         """
         return MappedSearchStrategy(
             pack=pack, strategy=self
@@ -312,7 +313,6 @@ class SearchStrategy(object):
         strategy(expand(x))
 
         This method is part of the public API.
-
         """
         from hypothesis.searchstrategy.flatmapped import FlatMapStrategy
         return FlatMapStrategy(
@@ -326,7 +326,6 @@ class SearchStrategy(object):
         Unsatisfiable.
 
         This method is part of the public API.
-
         """
         return FilteredStrategy(
             condition=condition,
@@ -342,7 +341,6 @@ class SearchStrategy(object):
         of this strategy or the other strategy.
 
         This method is part of the public API.
-
         """
         if not isinstance(other, SearchStrategy):
             raise ValueError('Cannot | a SearchStrategy with %r' % (other,))
@@ -352,7 +350,6 @@ class SearchStrategy(object):
         """Throw an exception if the strategy is not valid.
 
         This can happen due to lazy construction
-
         """
         if self.validate_called:
             return
@@ -361,9 +358,34 @@ class SearchStrategy(object):
             self.do_validate()
             self.is_empty
             self.has_reusable_values
-        except:
+        except Exception:
             self.validate_called = False
             raise
+
+    LABELS = {}
+
+    @property
+    def class_label(self):
+        cls = self.__class__
+        try:
+            return cls.LABELS[cls]
+        except KeyError:
+            pass
+        result = calc_label_from_cls(cls)
+        cls.LABELS[cls] = result
+        return result
+
+    @property
+    def label(self):
+        if self.__label is calculating:
+            return 0
+        if self.__label is None:
+            self.__label = calculating
+            self.__label = self.calc_label()
+        return self.__label
+
+    def calc_label(self):
+        return self.class_label
 
     def do_validate(self):
         pass
@@ -376,14 +398,12 @@ class SearchStrategy(object):
 
 
 class OneOfStrategy(SearchStrategy):
-
     """Implements a union of strategies. Given a number of strategies this
     generates values which could have come from any of them.
 
     The conditional distribution draws uniformly at random from some
     non-empty subset of these strategies and then draws from the
     conditional distribution of that strategy.
-
     """
 
     def __init__(self, strategies, bias=None):
@@ -428,23 +448,41 @@ class OneOfStrategy(SearchStrategy):
                     continue
                 seen.add(s)
                 pruned.append(s)
+            branch_labels = []
+            shift = bit_length(len(pruned))
+            for i, p in enumerate(pruned):
+                branch_labels.append(
+                    (((self.label ^ p.label) << shift) + i) & LABEL_MASK)
             self.__element_strategies = pruned
+            self.__branch_labels = tuple(branch_labels)
         return self.__element_strategies
+
+    @property
+    def branch_labels(self):
+        self.element_strategies
+        return self.__branch_labels
+
+    def calc_label(self):
+        return combine_labels(self.class_label, *[
+            p.label for p in self.original_strategies
+        ])
 
     def do_draw(self, data):
         n = len(self.element_strategies)
         assert n > 0
         if n == 1:
             return data.draw(self.element_strategies[0])
-        elif self.sampler is None:
+
+        if self.sampler is None:
             i = cu.integer_range(data, 0, n - 1)
         else:
             i = self.sampler.sample(data)
 
-        return data.draw(self.element_strategies[i])
+        return data.draw(
+            self.element_strategies[i], label=self.branch_labels[i])
 
     def __repr__(self):
-        return ' | '.join(map(repr, self.original_strategies))
+        return 'one_of(%s)' % ', '.join(map(repr, self.original_strategies))
 
     def do_validate(self):
         for e in self.element_strategies:
@@ -463,12 +501,10 @@ class OneOfStrategy(SearchStrategy):
 
 
 class MappedSearchStrategy(SearchStrategy):
-
     """A strategy which is defined purely by conversion to and from another
     strategy.
 
     Its parameter and distribution come from that other strategy.
-
     """
 
     def __init__(self, strategy, pack=None):
@@ -504,8 +540,12 @@ class MappedSearchStrategy(SearchStrategy):
         for _ in range(3):
             i = data.index
             try:
-                return self.pack(data.draw(self.mapped_strategy))
+                data.start_example(MAPPED_SEARCH_STRATEGY_DO_DRAW_LABEL)
+                result = self.pack(data.draw(self.mapped_strategy))
+                data.stop_example()
+                return result
             except UnsatisfiedAssumption:
+                data.stop_example(discard=True)
                 if data.index == i:
                     raise
         reject()
@@ -563,8 +603,7 @@ class FilteredStrategy(SearchStrategy):
 
     @property
     def branches(self):
-        branches = [
+        return [
             FilteredStrategy(strategy=strategy, condition=self.condition)
             for strategy in self.filtered_strategy.branches
         ]
-        return branches

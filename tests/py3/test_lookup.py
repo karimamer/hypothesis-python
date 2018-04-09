@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -231,6 +231,11 @@ def annotated_func(a: int, b: int=2, *, c: int, d: int=4):
     return a + b + c + d
 
 
+def test_issue_946_regression():
+    # Turned type hints into kwargs even if the required posarg was passed
+    st.builds(annotated_func, st.integers()).example()
+
+
 @pytest.mark.parametrize('thing', [
     annotated_func,  # Works via typing.get_type_hints
     typing.NamedTuple('N', [('a', int)]),  # Falls back to inspection
@@ -334,3 +339,65 @@ def test_resolves_flag_enum(resolver):
         assert isinstance(ex, F)
 
     inner()
+
+
+class AnnotatedTarget(object):
+
+    def __init__(self, a: int, b: int):
+        pass
+
+    def method(self, a: int, b: int):
+        pass
+
+
+@pytest.mark.parametrize('target', [
+    AnnotatedTarget, AnnotatedTarget(1, 2).method
+])
+@pytest.mark.parametrize('args,kwargs', [
+    ((), {}),
+    ((1,), {}),
+    ((1, 2), {}),
+    ((), dict(a=1)),
+    ((), dict(b=2)),
+    ((), dict(a=1, b=2)),
+])
+def test_required_args(target, args, kwargs):
+    # Mostly checking that `self` (and only self) is correctly excluded
+    st.builds(target, *map(st.just, args),
+              **{k: st.just(v) for k, v in kwargs.items()}).example()
+
+
+@pytest.mark.parametrize('thing', [
+    typing.Optional, typing.List, getattr(typing, 'Type', typing.Set)
+])  # check Type if it's available, otherwise Set is redundant but harmless
+def test_cannot_resolve_bare_forward_reference(thing):
+    with pytest.raises(InvalidArgument):
+        t = thing['int']
+        if type(getattr(t, '__args__', [None])[0]) != typing._ForwardRef:
+            assert sys.version_info[:2] == (3, 5)
+            pytest.xfail('python 3.5 typing module is really weird')
+        st.from_type(t).example()
+
+
+class Tree:
+    def __init__(self,
+                 left: typing.Optional['Tree'],
+                 right: typing.Optional['Tree']):
+        self.left = left
+        self.right = right
+
+    def __repr__(self):
+        return 'Tree({}, {})'.format(self.left, self.right)
+
+
+def test_resolving_recursive_type():
+    try:
+        assert isinstance(st.builds(Tree).example(), Tree)
+    except ResolutionFailed:
+        assert sys.version_info[:2] == (3, 5)
+        pytest.xfail('python 3.5 typing module may not resolve annotations')
+    except TypeError:
+        # TypeError raised if typing.get_type_hints(Tree.__init__) fails; see
+        # https://github.com/HypothesisWorks/hypothesis-python/issues/1074
+        assert sys.version_info[:2] == (3, 5)
+        pytest.skip('Could not find type hints to resolve')

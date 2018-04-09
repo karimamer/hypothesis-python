@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -24,12 +24,14 @@ from __future__ import division, print_function, absolute_import
 import sys
 import math
 
-from hypothesis import seed, given, assume, reject, settings
-from hypothesis.errors import Unsatisfiable
+from hypothesis import HealthCheck, given, assume, settings
 from tests.common.utils import fails
-from hypothesis.strategies import lists, floats, integers
+from hypothesis.strategies import data, lists, floats
 
-TRY_HARDER = settings(max_examples=1000, max_iterations=2000)
+TRY_HARDER = settings(
+    max_examples=1000, max_iterations=2000,
+    suppress_health_check=[HealthCheck.filter_too_much]
+)
 
 
 @given(floats())
@@ -146,21 +148,14 @@ def test_can_find_floats_that_do_not_round_trip_through_reprs(x):
     assert float(repr(x)) == x
 
 
+finite_floats = floats(allow_infinity=False, allow_nan=False)
+
+
 @settings(deadline=None)
-@given(floats(), floats(), integers())
-def test_floats_are_in_range(x, y, s):
-    assume(not (math.isnan(x) or math.isnan(y)))
-    assume(not (math.isinf(x) or math.isinf(y)))
+@given(finite_floats, finite_floats, data())
+def test_floats_are_in_range(x, y, data):
     x, y = sorted((x, y))
     assume(x < y)
 
-    @given(floats(x, y))
-    @seed(s)
-    @settings(max_examples=10)
-    def test_is_in_range(t):
-        assert x <= t <= y
-
-    try:
-        test_is_in_range()
-    except Unsatisfiable:
-        reject()
+    t = data.draw(floats(x, y))
+    assert x <= t <= y

@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -38,7 +38,7 @@ from hypothesis.internal.compat import ARG_NAME_ATTRIBUTE, hrange, \
 
 
 def fully_qualified_name(f):
-    """Returns a unique identifier for f pointing to the module it was define
+    """Returns a unique identifier for f pointing to the module it was defined
     on, and an containing functions."""
     if f.__module__ is not None:
         return f.__module__ + '.' + qualname(f)
@@ -53,7 +53,6 @@ def is_mock(obj):
     args. As they are sneaky and can look like almost anything else,
     we'll check this by looking for random attributes.  This is more
     robust than looking for types.
-
     """
     for _ in range(10):
         if not hasattr(obj, str(uuid.uuid4())):
@@ -67,7 +66,6 @@ def function_digest(function):
     minor changes to the function.
 
     No guarantee of uniqueness though it usually will be.
-
     """
     hasher = hashlib.md5()
     try:
@@ -91,17 +89,28 @@ def function_digest(function):
 
 
 def required_args(target, args=(), kwargs=()):
-    """Return a set of required args to target."""
+    """Return a set of names of required args to target that were not supplied
+    in args or kwargs.
+
+    This is used in builds() to determine which arguments to attempt to
+    fill from type hints.  target may be any callable (including classes
+    and bound methods).  args and kwargs should be as they are passed to
+    builds() - that is, a tuple of values and a dict of names: values.
+    """
     try:
         spec = getfullargspec(
             target.__init__ if inspect.isclass(target) else target)
     except TypeError:  # pragma: no cover
         return None
-    # For classes, self is present in the argspec but not really required
-    posargs = spec.args[1:] if inspect.isclass(target) else spec.args
-    return set(posargs + spec.kwonlyargs) \
+    # self appears in the argspec of __init__ and bound methods, but it's an
+    # error to explicitly supply it - so we might skip the first argument.
+    skip_self = int(inspect.isclass(target) or inspect.ismethod(target))
+    # Start with the args that were not supplied and all kwonly arguments,
+    # then remove all positional arguments with default values, and finally
+    # remove kwonly defaults and any supplied keyword arguments
+    return set(spec.args[skip_self + len(args):] + spec.kwonlyargs) \
         - set(spec.args[len(spec.args) - len(spec.defaults or ()):]) \
-        - set(spec.kwonlydefaults or ()) - set(args) - set(kwargs)
+        - set(spec.kwonlydefaults or ()) - set(kwargs)
 
 
 def convert_keyword_arguments(function, args, kwargs):
@@ -109,7 +118,6 @@ def convert_keyword_arguments(function, args, kwargs):
     passed as positional and keyword args to the function. Unless function has.
 
     **kwargs the dictionary will always be empty.
-
     """
     argspec = getfullargspec(function)
     new_args = []
@@ -158,7 +166,6 @@ def convert_positional_arguments(function, args, kwargs):
     been moved to kwargs.
 
     new_args will only be non-empty if function has a variadic argument.
-
     """
     argspec = getfullargspec(function)
     new_kwargs = dict(argspec.kwonlydefaults or {})
@@ -233,7 +240,6 @@ def extract_lambda_source(f):
 
     This is not a good function and I am sorry for it. Forgive me my
     sins, oh lord
-
     """
     argspec = getfullargspec(f)
     arg_strings = []
@@ -270,6 +276,9 @@ def extract_lambda_source(f):
     source = LINE_CONTINUATION.sub(' ', source)
     source = WHITESPACE.sub(' ', source)
     source = source.strip()
+    assert 'lambda' in source
+
+    tree = None
 
     try:
         tree = ast.parse(source)
@@ -277,15 +286,32 @@ def extract_lambda_source(f):
         for i in hrange(len(source) - 1, len('lambda'), -1):
             prefix = source[:i]
             if 'lambda' not in prefix:
-                return if_confused
+                break
             try:
                 tree = ast.parse(prefix)
                 source = prefix
                 break
             except SyntaxError:
                 continue
-        else:
-            return if_confused
+    if tree is None:
+        if source.startswith('@'):
+            # This will always eventually find a valid expression because
+            # the decorator must be a valid Python function call, so will
+            # eventually be syntactically valid and break out of the loop. Thus
+            # this loop can never terminate normally, so a no branch pragma is
+            # appropriate.
+            for i in hrange(len(source) + 1):  # pragma: no branch
+                p = source[1:i]
+                if 'lambda' in p:
+                    try:
+                        tree = ast.parse(p)
+                        source = p
+                        break
+                    except SyntaxError:
+                        pass
+
+    if tree is None:
+        return if_confused
 
     all_lambdas = extract_all_lambdas(tree)
     aligned_lambdas = [
@@ -304,10 +330,9 @@ def extract_lambda_source(f):
             parsed = ast.parse(source[:i])
             assert len(parsed.body) == 1
             assert parsed.body
-            if not isinstance(parsed.body[0].value, ast.Lambda):
-                continue
-            source = source[:i]
-            break
+            if isinstance(parsed.body[0].value, ast.Lambda):
+                source = source[:i]
+                break
         except SyntaxError:
             pass
     lines = source.split('\n')
@@ -493,7 +518,6 @@ def impersonate(target):
 
     Note that this updates the function in place, it doesn't return a
     new one.
-
     """
     def accept(f):
         f.__code__ = update_code_location(

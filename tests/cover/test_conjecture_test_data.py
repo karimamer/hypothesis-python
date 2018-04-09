@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,8 +19,8 @@ from __future__ import division, print_function, absolute_import
 
 import pytest
 
-from hypothesis import strategies as st
 from hypothesis import given
+from hypothesis import strategies as st
 from hypothesis.errors import Frozen
 from hypothesis.internal.conjecture.data import Status, StopTest, \
     ConjectureData
@@ -103,7 +103,7 @@ def test_closes_interval_on_error_in_strategy():
     with pytest.raises(ValueError):
         x.draw(BoomStrategy())
     x.freeze()
-    assert len(x.intervals) == 1
+    assert not any(eg.end is None for eg in x.examples)
 
 
 class BigStrategy(SearchStrategy):
@@ -117,4 +117,4 @@ def test_does_not_double_freeze_in_interval_close():
     with pytest.raises(StopTest):
         x.draw(BigStrategy())
     assert x.frozen
-    assert len(x.intervals) == 0
+    assert not any(eg.end is None for eg in x.examples)

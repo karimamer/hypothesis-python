@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -19,8 +19,8 @@ from __future__ import division, print_function, absolute_import
 
 import sys
 
-from hypothesis import settings as Settings
 from hypothesis import find, given, assume, reject
+from hypothesis import settings as Settings
 from hypothesis.errors import NoSuchExample, Unsatisfiable
 
 TIME_INCREMENT = 0.01
@@ -117,7 +117,6 @@ def assert_all_examples(strategy, predicate):
 
     :param strategy: Hypothesis strategy to check
     :param predicate: (callable) Predicate that takes example and returns bool
-
     """
     @given(strategy)
     def assert_examples(s):

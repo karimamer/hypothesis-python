@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -23,7 +23,6 @@ invariants.
 
 It also demonstrates the useful testing technique of testing how the answer
 should change (or not) in response to movements in the underlying data.
-
 """
 
 from __future__ import division, print_function, absolute_import
@@ -40,7 +39,6 @@ def binary_search(ls, v):
 
     1. ls.insert(i, v) is sorted
     2. ls.insert(j, v) is not sorted for j < i
-
     """
     # Without this check we will get an index error on the next line when the
     # list is empty.
@@ -134,7 +132,6 @@ def test_inserts_into_same_place_twice(ls, v):
 
     This is an instance of a good general category of test: Testing how the
     function moves in responses to changes in the underlying data.
-
     """
     i = binary_search(ls, v)
     ls.insert(i, v)

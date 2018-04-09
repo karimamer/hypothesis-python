@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -17,10 +17,14 @@
 
 from __future__ import division, print_function, absolute_import
 
+import re
+import time
 import traceback
 
+import pytest
+
+from hypothesis import HealthCheck, event, given, example, settings
 from hypothesis import strategies as st
-from hypothesis import event, given, example
 from hypothesis.statistics import collector
 
 
@@ -33,9 +37,8 @@ def call_for_statistics(test_function):
     with collector.with_value(callback):
         try:
             test_function()
-        except:
+        except Exception:
             traceback.print_exc()
-            pass
     assert result[0] is not None
     return result[0]
 
@@ -97,25 +100,25 @@ def test_does_not_report_on_examples():
     assert not any('boo' in e for e in stats.events)
 
 
-timing = 0
+def test_exact_timing():
+    @settings(suppress_health_check=[HealthCheck.too_slow], deadline=None)
+    @given(st.integers())
+    def test(i):
+        time.sleep(0.5)
+
+    stats = call_for_statistics(test)
+    assert re.match(r'~ 5\d\dms', stats.runtimes)
 
 
-def fake_time():
-    global timing
-    timing += 0.5
-    return timing
-
-
-def test_exact_timing(monkeypatch):
-    import hypothesis.internal.conjecture.data as d
-    monkeypatch.setattr(d, 'benchmark_time', fake_time)
+def test_apparently_instantaneous_tests():
+    time.freeze()
 
     @given(st.integers())
     def test(i):
         pass
 
     stats = call_for_statistics(test)
-    assert stats.runtimes == '~ 500ms'
+    assert stats.runtimes == '< 1ms'
 
 
 def test_flaky_exit():
@@ -131,3 +134,38 @@ def test_flaky_exit():
 
     stats = call_for_statistics(test)
     assert stats.exit_reason == 'test was flaky'
+
+
+@pytest.mark.parametrize('draw_delay', [False, True])
+@pytest.mark.parametrize('test_delay', [False, True])
+def test_draw_time_percentage(draw_delay, test_delay):
+    time.freeze()
+
+    @st.composite
+    def s(draw):
+        if draw_delay:
+            time.sleep(0.05)
+
+    @given(s())
+    def test(_):
+        if test_delay:
+            time.sleep(0.05)
+
+    stats = call_for_statistics(test)
+    if not draw_delay:
+        assert stats.draw_time_percentage == '~ 0%'
+    elif test_delay:
+        assert stats.draw_time_percentage == '~ 50%'
+    else:
+        assert stats.draw_time_percentage == '~ 100%'
+
+
+def test_has_lambdas_in_output():
+    @given(st.integers().filter(lambda x: x % 2 == 0))
+    def test(i):
+        pass
+
+    stats = call_for_statistics(test)
+    assert any(
+        'lambda x: x % 2 == 0' in e for e in stats.events
+    )

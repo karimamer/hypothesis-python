@@ -3,7 +3,7 @@
 # This file is part of Hypothesis, which may be found at
 # https://github.com/HypothesisWorks/hypothesis-python
 #
-# Most of this work is copyright (C) 2013-2017 David R. MacIver
+# Most of this work is copyright (C) 2013-2018 David R. MacIver
 # (david@drmaciver.com), but it contains contributions by others. See
 # CONTRIBUTING.rst for a full list of people who may hold copyright, and
 # consult the git log if you need to determine who owns an individual
@@ -23,12 +23,13 @@ from decimal import Decimal
 import pytest
 
 import hypothesis.strategies as st
-from hypothesis import find, given, example
+from hypothesis import find, given, example, settings
 from hypothesis.errors import NoExamples
 from hypothesis.control import _current_build_context
 from tests.common.utils import checks_deprecated_behaviour
 
 
+@settings(deadline=None)
 @given(st.integers())
 def test_deterministic_examples_are_deterministic(seed):
     with _current_build_context.with_value(None):
