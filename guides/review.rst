@@ -2,18 +2,35 @@
 The Hypothesis Code Review Handbook
 ===================================
 
-Hypothesis has a process of reviewing every change, internal or external.
-This is a document outlining that process. It's partly descriptive, partly
-prescriptive, and entirely prone to change in response to circumstance
-and need. We're still figuring this thing out!
+Note: This review guide was written with the Python version in mind,
+but should apply to *all* versions. If you find a place where it's a bit
+too Python specific, please fix it or file an issue.
+
+This document outlines the process for reviewing changes to Hypothesis. It's
+partly descriptive, partly prescriptive, and entirely prone to change in
+response to circumstance and need. We're still figuring this thing out!
+
+-----------------
+What Needs Review
+-----------------
+
+The repository includes Hypothesis implementations for multiple languages,
+which have different review requirements due to different levels of project
+maturity:
+
+- all changes to hypothesis-python and the language-independent build
+  infrastructure must be signed off by at least one person with write access to
+  the repo other than the author of the change. (These requirements will apply
+  to any Hypothesis implementations with a 1.0 release.)
+- changes by `DRMacIver <https://github.com/DRMacIver>`_ to hypothesis-ruby do
+  not require review, but will be posted as pull requests, often for long
+  enough that if someone wants to review and ask questions, they can.
 
 ----------------
 How Review Works
 ----------------
 
-All changes to Hypothesis must be signed off by at least one person with
-write access to the repo other than the author of the change. Once the
-build is green and a reviewer has approved the change, anyone on the
+Once the build is green and a reviewer has approved the change, anyone on the
 maintainer team may merge the request.
 
 More than one maintainer *may* review a change if they wish to, but it's
@@ -71,21 +88,48 @@ thinks this conflicts with the above higher level goals, they may make
 an exception if both the author and another maintainer agree.
 
 
-~~~~~~~~~~~~~~~~~~~~
-General Requirements
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~
+Orthogonality
+~~~~~~~~~~~~~
 
-The following are required for almost every change:
+For all minor or patch releases, we enforce a hard and fast rule that they
+contain no more than one user-visible change. Major releases are allowed
+to bundle multiple changes together, but these should be structured as
+smaller pull requests into some tracking branch.
 
-1. Changes must be of reasonable size. If a change could logically
-   be broken up into several smaller changes that could be reviewed
-   separately on their own merits, it should be.
-2. The motivation for each change should be clearly explained (this
-   doesn't have to be an essay, especially for small changes, but
-   at least a sentence of explanation is usually required).
-3. The likely consequences of a change should be outlined (again,
-   this doesn't have an essay, and it may be sufficiently
-   self-explanatory that the motivation section is sufficient).
+We are currently very bad at this, so reviewers should feel empowered
+to be extra strict and provide a lot of push back on this.
+
+What counts as a user visible change is somewhat up to individual
+judgement, but you should err in the direction of assuming that
+if it might count then it does count.
+
+A good rule of thumb is that the ``RELEASE.rst`` uses the words "additionally"
+or needs bullet points to be clear, it is likely too large.
+
+Ideally changes that are not user visible should also be self-contained
+into their own releases, but a certain amount of leniency is permitted -
+it's certainly OK to do a moderate amount of refactoring while you're
+in the area, and if a pull request involves no release at all then the same
+level of orthogonality is not required (but is still desirable).
+
+~~~~~~~~~~~~~~~~~~~~~~
+Clarity of Description
+~~~~~~~~~~~~~~~~~~~~~~
+
+The ``RELEASE.rst`` should contain a description of the change that
+makes clear:
+
+1. The motivation for the change
+2. The likely consequences of the change
+
+This doesn't have to be an essay. If you're following the orthogonality
+requirements a paragraph or two is likely sufficient.
+
+Any additional information that is useful to reviewers should be provided
+in the pull request comment. This can include e.g. background, why the
+particular approach was taken, references to internals that are unlikely
+to be of interest to users.
 
 ~~~~~~~~~~~~~~~~~~~~~
 Functionality Changes
@@ -142,7 +186,8 @@ Public API changes must satisfy the following:
    though other maintainers are welcome and likely to chip in to review as
    well.
 9. We have a separate guide for `house API style <api-style.rst>`_ which should
-   be followed.
+   be followed. Note that currently this only covers the API style for the Python
+   version. We are still figuring out the API style for the Ruby version.
 
 ~~~~~~~~~
 Bug Fixes
@@ -159,6 +204,8 @@ Bug Fixes
 ~~~~~~~~~~~~~~~~
 Settings Changes
 ~~~~~~~~~~~~~~~~
+
+Note: This section currently only applies to the Python version.
 
 It is tempting to use the Hypothesis settings object as a dumping ground for
 anything and everything that you can think of to control Hypothesis. This
@@ -187,7 +234,8 @@ Engine Changes
 
 Engine changes are anything that change a "fundamental" of how Hypothesis
 works. A good rule of thumb is that an engine change is anything that touches
-a file in hypothesis.internal.conjecture.
+a file in hypothesis.internal.conjecture (Python version) or Rust code (Ruby
+version).
 
 All such changes should:
 

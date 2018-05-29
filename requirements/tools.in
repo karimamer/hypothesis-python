@@ -1,6 +1,7 @@
 flake8
 flake8-docstrings
 isort
+mypy
 pip-tools
 pyformat
 pytest
@@ -13,3 +14,5 @@ attrs
 coverage
 pyupio
 django
+numpy
+IPython
